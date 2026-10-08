@@ -100,7 +100,7 @@ Backends declare `destination_class` and `max_classification`. A request may onl
 *In v0.1.0:* single egress guard (backends, identity provider, PostgreSQL), allow-list, deployment profiles, internal-address enforcement, lint rule against other dialing. Everything marked "planned" below is not built yet.
 
 - The gateway is the only component with outbound access, via a single egress guard. That covers model backends, the identity provider and PostgreSQL: the database connection is made with the guard's dialer and, whatever the profile, may only reach an internal address (unix sockets are refused). A lint rule (`forbidigo`) fails the build if any other package dials, resolves names or uses a ready-made HTTP client.
-- Outbound destinations are derived only from validated Backend configuration; the active deployment profile gates which destination classes may exist.
+- Outbound destinations are derived only from validated configuration (backends, the identity provider) and the database URL chosen by the operator, never from request content; the active deployment profile gates which destination classes may exist.
 - In `air-gapped`, configuration containing a non-internal Backend is rejected at load, and the dialer refuses non-internal addresses even if one slipped through.
 - Planned: optional outbound proxy and custom CA bundle for corporate networks, and reference Kubernetes `NetworkPolicy` and firewall rules shipped with the deployment manifests, so that the guarantee does not depend on the application alone. Until then, enforce the same boundary with your own firewall or network policies.
 - No telemetry, update checks or licence checks. Ever.
