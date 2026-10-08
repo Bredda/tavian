@@ -1,6 +1,6 @@
 # ADR-0002: Generic OIDC for identity; Keycloak as reference
 
-- Status: Proposed
+- Status: Accepted (2026-10-08), implemented in M1
 - Date: 2026-10-08
 
 ## Context

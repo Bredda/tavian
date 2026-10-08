@@ -135,7 +135,9 @@ Default: `hash`. Storing content is a conscious, policy-level decision with a ma
 ## Secrets management
 
 - Provider credentials are never in the policy/config store in plaintext: Backends reference a secret (file mounted by the platform, Kubernetes Secret, Vault). A built-in encrypted store may exist for the small-deployment path.
-- API keys: shown once, stored as a salted hash, identified by prefix, rotatable.
+- API keys: shown once (`tavian keygen`), stored only as a SHA-256 hash, never in clear. Keys are 256-bit random values, so there is nothing to brute-force and a salt would add nothing: the hash is only a lookup handle. The `tav_` prefix marks the secret's type for secret scanners; the key's identity is its configured `id`, which is what usage events carry.
+- Key lifecycle: *revoke* by removing the entry and reloading (`SIGHUP`, effective on the next request); *rotate* by adding the new key next to the old one, moving clients over, then removing the old one, with no downtime. Expiry (`expires_at`) and a per-key maximum classification are planned before M2; database-backed keys with last-use tracking come with the admin API (M3).
+- OIDC access tokens are verified locally and cannot be revoked before they expire: keep their lifetime short at the identity provider ([ADR-0002](adr/0002-generic-oidc.md)).
 - Admin API uses OIDC with MFA enforced at the IdP.
 
 ## Limits and residual risk
@@ -146,16 +148,20 @@ We state these plainly rather than hide them:
 - Response `enforce` mode cannot recall content already released.
 - Multimodal and file content are not inspected in early versions.
 - A user can still memorize and retype data that the gateway never sees; the gateway controls only what passes through it.
+- TLS is not terminated by Tavian yet: run it behind a TLS-terminating proxy or service mesh, and keep the admin listener on a private interface. Native TLS on both listeners comes in M3. (PostgreSQL connections can already use TLS through the connection URL, `sslmode=verify-full`.)
 - A compromised gateway host defeats the gateway; hardening, signed builds and host isolation remain the operator's responsibility.
 - Energy and carbon figures are estimates.
 
-## Hardening checklist (to turn into tests)
+## Hardening checklist
 
-- [ ] Run as non-root, read-only filesystem, no capabilities
-- [ ] Separate listeners/ports for data plane and admin
-- [ ] TLS everywhere; mTLS to PostgreSQL and internal backends where possible
-- [ ] Request size, header, and concurrency limits
-- [ ] CI check that no code path logs request/response bodies
-- [ ] CI check that only the egress guard imports outbound dialing
-- [ ] Fuzzing for the request parser and detectors
-- [ ] Dependency scanning, SBOM, signed releases
+Status as of v0.1.0. Items are meant to become tests.
+
+- [x] Run as non-root, read-only filesystem, no capabilities (image and compose file)
+- [x] Separate listeners/ports for data plane and admin
+- [ ] TLS everywhere; mTLS to PostgreSQL and internal backends where possible. *Database TLS works through the URL; native listener TLS and backend mTLS: M3*
+- [ ] Request size, header, and concurrency limits. *Size and header limits done; an in-flight cap is next*
+- [ ] CI check that no code path logs request/response bodies. *Planned with content inspection (M2): a canary test across success, error and stream paths, plus lint*
+- [ ] CI check that outbound connections only originate from the egress guard. *Planned: the PostgreSQL connection is to go through the guard too, then a lint rule enforces it*
+- [ ] Fuzzing for the request parser and detectors. *Detectors with content inspection (M2); parsers right after*
+- [x] Dependency updates (Dependabot for Go modules, Actions, Docker, and the conformance suite's SDK pins)
+- [ ] SBOM, signed releases. *Release archives carry checksums today; signing and SBOM are v1.0 (see [OPEN_QUESTIONS](OPEN_QUESTIONS.md) 21)*

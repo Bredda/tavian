@@ -11,7 +11,7 @@ Security-relevant foundations (config snapshots, decision records, the multi-dim
 - [x] Licence chosen (Apache-2.0), project renamed to Tavian
 - [x] Repo skeleton, CI, trunk-based workflow and release-please ([ADR-0013](adr/0013-trunk-based-development-and-release-please.md))
 - [x] First ADRs accepted; blocking [open questions](OPEN_QUESTIONS.md) resolved except the pre-publication name checks
-- [ ] Create the GitHub repository and run `scripts/setup-github-repo.sh`
+- [x] Create the GitHub repository and run `scripts/setup-github-repo.sh`
 - [ ] Short competitive analysis (what exists, where the gap really is)
 
 ## M1 — Walking skeleton
@@ -43,6 +43,16 @@ Progress (skeleton merged = ✓):
 - [x] Keycloak in the compose stack (realm `tavian`, users alice and bob)
 - [x] Conformance tests against the OpenAI SDKs (non-streaming, streaming, tool calls): `conformance/`, Python and Node, in CI
 
+_M1 shipped as v0.1.0._
+
+## Before M2 — hardening pass
+
+Gaps found when comparing [SECURITY.md](SECURITY.md) with the code, closed first because M2 builds on them:
+
+- [ ] PostgreSQL connections go through the egress guard; a lint rule forbids other direct dialing
+- [ ] In-flight request cap (`limits.max_inflight`)
+- [ ] API key lifecycle: `expires_at`, per-key and per-mapping `max_classification` (needed by classification in M2), rotation procedure
+
 ## M2 — The finance demo ("prove it")
 
 > *The scenario from VISION.md, end to end.*
@@ -65,6 +75,9 @@ Progress (skeleton merged = ✓):
 - OpenTelemetry traces (one span per stage), Prometheus metrics, reference Grafana dashboards
 - Multi-replica support: Redis shared counters, snapshot distribution
 - Usage rollups and chargeback export
+- Native TLS on both listeners; mTLS to PostgreSQL and internal backends
+- Database-backed API keys with last-use tracking and a revocation list (with the admin API)
+- Fuzzing of the request, SSE, JWT and configuration parsers in scheduled CI
 
 ## M4 — Security depth
 
