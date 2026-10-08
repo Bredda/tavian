@@ -315,3 +315,25 @@ func BenchmarkInspect(b *testing.B) {
 		}
 	}
 }
+
+// A flood of harmless findings cuts the list at maxFindings; what was found
+// must still be known, because classification depends on it.
+func TestKindsSurviveTruncation(t *testing.T) {
+	e := NewWith(30*time.Second, testKey, builtinForTest()...)
+	flood := strings.Repeat("u@b.example ", maxFindings+10)
+	res, err := e.Inspect(context.Background(), text(flood+" FR14 2004 1010 0505 0001 3M02 606"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Truncated {
+		t.Fatal("test needs a truncated result")
+	}
+	for _, f := range res.Findings {
+		if f.Subtype == "iban" {
+			t.Fatal("the IBAN should have been cut from the findings for this test to mean anything")
+		}
+	}
+	if got := strings.Join(res.Kinds, ","); got != "pii.email,pii.iban" {
+		t.Errorf("kinds = %q, want pii.email,pii.iban", got)
+	}
+}

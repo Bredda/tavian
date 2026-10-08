@@ -24,6 +24,7 @@ import (
 	"github.com/bredda/tavian/internal/ids"
 	"github.com/bredda/tavian/internal/inspect"
 	"github.com/bredda/tavian/internal/meter"
+	"github.com/bredda/tavian/internal/policy"
 	"github.com/bredda/tavian/internal/provider/openai"
 	"github.com/bredda/tavian/internal/router"
 	"github.com/bredda/tavian/internal/version"
@@ -132,6 +133,7 @@ type call struct {
 	at         time.Time
 	model      string
 	inspection *inspect.Result
+	class      *policy.Classification
 }
 
 // record starts the decision record of c.
@@ -153,6 +155,14 @@ func (c *call) record(ctx context.Context, outcome string, reason audit.Reason, 
 	}
 	if c.inspection != nil {
 		rec.WithInspection(*c.inspection)
+	}
+	if c.class != nil {
+		rec.Label = string(c.class.Label)
+		rec.LabelSources = &audit.LabelSources{
+			Declared: string(c.class.Sources.Declared),
+			Default:  string(c.class.Sources.Default),
+			Inferred: string(c.class.Sources.Inferred),
+		}
 	}
 	return rec
 }
@@ -249,6 +259,20 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return s.refuse(ctx, w, c, reason, msg, "inspection_blocked")
 	}
 
+	// classify: the label is the most sensitive of what the caller declared,
+	// the default and what inspection found; it must fit the caller's clearance.
+	declared, err := policy.ParseDeclared(r.Header.Values(policy.DeclaredHeader))
+	if err != nil {
+		return s.refuse(ctx, w, c, audit.InvalidRequest, "invalid "+policy.DeclaredHeader+" header: expected one of public, internal, confidential, restricted", "invalid_request")
+	}
+	class := policy.Classify(declared, inspection.Kinds)
+	c.class = &class
+	s.Metrics.observeLabel(class.Label)
+	if class.Exceeds(id.MaxClassification) {
+		return s.refuse(ctx, w, c, audit.ClearanceExceeded,
+			"this request is classified "+string(class.Label)+", above the "+string(id.MaxClassification)+" your credentials are cleared to send", "clearance_exceeded")
+	}
+
 	// TODO(M2): policy phase A -> constraints (allowed destinations, redactions).
 
 	// route
@@ -332,6 +356,9 @@ func (s *server) event(ctx context.Context, c *call, at time.Time, outcome strin
 	if c.inspection != nil {
 		sum := c.inspection.Summary()
 		ev.Inspection = &sum
+	}
+	if c.class != nil {
+		ev.Label = string(c.class.Label)
 	}
 	return ev
 }

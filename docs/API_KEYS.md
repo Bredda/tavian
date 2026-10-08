@@ -72,8 +72,17 @@ send (`public` < `internal` < `confidential` < `restricted`). It defaults to
 `internal`. A compromised key can therefore never push data above its
 clearance through the gateway.
 
-The field is parsed and carried today; it is **enforced by the content policy
-that arrives with M2** (see the [roadmap](ROADMAP.md)). For OIDC users the
+The gateway **enforces** it: every request gets a classification label (see
+[SECURITY.md](SECURITY.md#data-classification)), and a request whose label is
+above the caller's clearance is refused with 403 `classification_exceeds_clearance`
+(reason `CLEARANCE_EXCEEDED` in the decision record). With the default
+clearance, a request that contains an IBAN, a payment card number, a French
+social security number (`confidential`) or a secret (`restricted`) is
+therefore refused: an application that is meant to handle such data must
+declare it, for example `max_classification: confidential` for a finance
+application. Ordinary prompts, including ones with e-mail addresses, phone
+numbers or IP addresses, are `internal` and unaffected. An identity without
+any clearance is refused every request. For OIDC users the
 clearance comes from the group mappings: `max_classification` on each mapping
 in `oidc.mappings`, and a person gets the highest of their groups, just as
 their allowed models add up.

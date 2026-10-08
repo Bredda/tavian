@@ -168,7 +168,7 @@ func TestRefusalWithoutARecordFailsClosed(t *testing.T) {
 // never a value.
 func TestRecordHoldsFindingDetailsButNoValue(t *testing.T) {
 	f := newFixture(t, 0)
-	f.post(t, f.key, `{"model":"llama-70b","messages":[{"role":"user","content":"pay `+canaryIBAN+` to `+canaryEmail+`"}]}`).Body.Close()
+	f.post(t, f.conf, `{"model":"llama-70b","messages":[{"role":"user","content":"pay `+canaryIBAN+` to `+canaryEmail+`"}]}`).Body.Close()
 	recs := decisions(f)
 	if len(recs) != 1 || len(recs[0].Findings) != 2 {
 		t.Fatalf("records = %+v", recs)

@@ -21,6 +21,7 @@ type Metrics struct {
 	duration *prometheus.HistogramVec
 	tokens   *prometheus.CounterVec
 
+	labels      *prometheus.CounterVec
 	inspections *prometheus.CounterVec
 	findings    *prometheus.CounterVec
 	inspectTime prometheus.Histogram
@@ -46,6 +47,10 @@ func NewMetrics() *Metrics {
 			Name: "tavian_tokens_total",
 			Help: "Tokens processed, by model, backend and direction (input|output).",
 		}, []string{"model", "backend", "direction"}),
+		labels: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_requests_by_label_total",
+			Help: "Chat requests by classification label (public|internal|confidential|restricted), refused ones included.",
+		}, []string{"label"}),
 		inspections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "tavian_inspections_total",
 			Help: "Request inspections, by status (ok|skipped|failed).",
@@ -68,7 +73,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
-		m.inspections, m.findings, m.inspectTime,
+		m.inspections, m.findings, m.inspectTime, m.labels,
 	)
 	return m
 }
@@ -166,4 +171,9 @@ func (m *Metrics) observeInspection(r inspect.Result) {
 	for _, f := range r.Findings {
 		m.findings.WithLabelValues(string(f.Type), f.Subtype).Inc()
 	}
+}
+
+// observeLabel counts a classified request.
+func (m *Metrics) observeLabel(l config.Classification) {
+	m.labels.WithLabelValues(string(l)).Inc()
 }

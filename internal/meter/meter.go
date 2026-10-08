@@ -32,6 +32,9 @@ type UsageEvent struct {
 	Team        string `json:"team"`
 	Application string `json:"application"`
 
+	// Label is the classification of the request.
+	Label string `json:"label,omitempty"`
+
 	Model         string `json:"model"`
 	UpstreamModel string `json:"upstream_model"`
 	Backend       string `json:"backend"`

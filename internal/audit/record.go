@@ -26,6 +26,14 @@ const (
 // spool can replay in one line. Counts in Inspection stay complete.
 const MaxFindings = 200
 
+// LabelSources says where the label of a request comes from. Empty means the
+// source did not apply.
+type LabelSources struct {
+	Declared string `json:"declared,omitempty"`
+	Default  string `json:"default"`
+	Inferred string `json:"inferred,omitempty"`
+}
+
 // DecisionRecord is written once for every authenticated chat request, refused
 // ones included. Requests refused before the caller is known (bad
 // credentials, overload) leave metrics and logs only: recording them would let
@@ -50,6 +58,11 @@ type DecisionRecord struct {
 	Model         string `json:"model,omitempty"`
 	UpstreamModel string `json:"upstream_model,omitempty"`
 	Backend       string `json:"backend,omitempty"`
+
+	// Label is the classification of the request and LabelSources where it
+	// comes from: what the caller declared, the default, what inspection found.
+	Label        string        `json:"label,omitempty"`
+	LabelSources *LabelSources `json:"label_sources,omitempty"`
 
 	Outcome    string `json:"outcome"`
 	ReasonCode string `json:"reason_code"`

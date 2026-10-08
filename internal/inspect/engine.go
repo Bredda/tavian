@@ -75,6 +75,10 @@ type Result struct {
 	Reason    string
 	Findings  []Finding
 	Truncated bool // more findings existed than maxFindings
+	// Kinds lists every "type.subtype" that was found, sorted, even when the
+	// findings themselves were cut at maxFindings. Classification relies on it
+	// so that a flood of harmless findings cannot hide a sensitive one.
+	Kinds     []string
 	Detectors []DetectorInfo
 	Duration  time.Duration
 }
@@ -234,6 +238,7 @@ func (e *Engine) Inspect(ctx context.Context, req Request) (Result, error) {
 	type outcome struct {
 		findings  []Finding
 		truncated bool
+		kinds     []string
 		detector  string
 		err       error
 	}
@@ -246,7 +251,7 @@ func (e *Engine) Inspect(ctx context.Context, req Request) (Result, error) {
 			}
 			done <- o
 		}()
-		o.findings, o.truncated, o.detector, o.err = e.run(ctx, req)
+		o.findings, o.truncated, o.kinds, o.detector, o.err = e.run(ctx, req)
 	}()
 
 	select {
@@ -254,7 +259,7 @@ func (e *Engine) Inspect(ctx context.Context, req Request) (Result, error) {
 		if o.err != nil {
 			return fail(CodeFailed, o.detector, o.err)
 		}
-		res.Findings, res.Truncated, res.Duration = o.findings, o.truncated, time.Since(start)
+		res.Findings, res.Truncated, res.Kinds, res.Duration = o.findings, o.truncated, o.kinds, time.Since(start)
 		return res, nil
 	case <-ctx.Done():
 		// The goroutine finishes on its own: regular expressions run in time
@@ -263,7 +268,7 @@ func (e *Engine) Inspect(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
-func (e *Engine) run(ctx context.Context, req Request) (out []Finding, truncated bool, detector string, err error) {
+func (e *Engine) run(ctx context.Context, req Request) (out []Finding, truncated bool, kinds []string, detector string, err error) {
 	segs := make([]Segment, len(req.Segments))
 	for i, s := range req.Segments {
 		s.Text = normalize(s.Text)
@@ -273,16 +278,16 @@ func (e *Engine) run(ctx context.Context, req Request) (out []Finding, truncated
 
 	for _, d := range e.detectors {
 		if err := ctx.Err(); err != nil {
-			return nil, false, d.Name(), err
+			return nil, false, nil, d.Name(), err
 		}
 		fs, err := call(ctx, d, nreq)
 		if err != nil {
-			return nil, false, d.Name(), err
+			return nil, false, nil, d.Name(), err
 		}
 		for _, f := range fs {
 			l := f.Location
 			if l.Segment < 0 || l.Segment >= len(segs) || l.Start < 0 || l.End <= l.Start || l.End > len(segs[l.Segment].Text) {
-				return nil, false, d.Name(), errors.New("finding outside the inspected text")
+				return nil, false, nil, d.Name(), errors.New("finding outside the inspected text")
 			}
 			seg := segs[l.Segment]
 			value := f.Canonical
@@ -307,10 +312,18 @@ func (e *Engine) run(ctx context.Context, req Request) (out []Finding, truncated
 		}
 		return a.End < b.End
 	})
+	seen := map[string]bool{}
+	for _, f := range out {
+		if k := string(f.Type) + "." + f.Subtype; !seen[k] {
+			seen[k] = true
+			kinds = append(kinds, k)
+		}
+	}
+	sort.Strings(kinds)
 	if len(out) > maxFindings {
 		out, truncated = out[:maxFindings], true
 	}
-	return out, truncated, "", nil
+	return out, truncated, kinds, "", nil
 }
 
 // call runs one detector; a panic is an error, not a crash.

@@ -95,6 +95,14 @@ Ordered labels (default `public < internal < confidential < restricted`). The **
 
 A caller can only raise the label, never lower it below what inspection infers.
 
+*In main after v0.1.0:* the label is computed for every authenticated chat request and recorded in the decision record with its three sources (and in the usage event and the `tavian_requests_by_label_total` metric).
+- **Declared:** the `X-Tavian-Classification` request header (`public`, `internal`, `confidential` or `restricted`; anything else is a 400). A declaration below what inspection infers, or below the default, changes nothing.
+- **Default:** `internal` for everyone. Per-team defaults come with the policy engine.
+- **Inferred**, by a built-in table that the policy engine will load from configuration: any secret → `restricted`; IBAN, payment card, French NIR → `confidential`. E-mail, phone, IP address and custom detectors do not raise the label on their own (the default `internal` already keeps them off public destinations). The inference uses every kind of finding seen, even when the detailed findings were cut at the per-request cap.
+- **Clearance:** a request whose label is above the caller's clearance (`max_classification` of the key or the person's groups, [API_KEYS.md](API_KEYS.md#clearance-max_classification)) is refused with 403 `classification_exceeds_clearance`, never silently lowered. The message names the label, never the content.
+
+Routing by destination class and backend `max_classification` follows in the next step; until then the label is recorded and enforced against the caller's clearance only.
+
 Backends declare `destination_class` and `max_classification`. A request may only be routed to a Backend with `max_classification ≥ label` whose destination class the policy allows for that label. Classification is thus enforced by *routing*, not by hoping each rule is written correctly.
 
 ## Egress control
@@ -149,7 +157,7 @@ Default: `hash`. Storing content is a conscious, policy-level decision with a ma
 
 - Provider credentials are never in the policy/config store in plaintext: Backends reference a secret (file mounted by the platform, Kubernetes Secret, Vault). A built-in encrypted store may exist for the small-deployment path.
 - API keys: shown once (`tavian keygen`), stored only as a SHA-256 hash, never in clear. Keys are 256-bit random values, so there is nothing to brute-force and a salt would add nothing: the hash is only a lookup handle. The `tav_` prefix marks the secret's type for secret scanners; the key's identity is its configured `id`, which is what usage events carry.
-- Key lifecycle ([API_KEYS.md](API_KEYS.md)): *revoke* by removing the entry and reloading (`SIGHUP`, effective on the next request); *rotate* by adding the new key next to the old one, moving clients over, then removing the old one, with no downtime; *expire* with `expires_at` (refused from that instant, named in the logs, counted in metrics). Each key and each OIDC group mapping carries a `max_classification` clearance, enforced by the content policy in M2. Database-backed keys with last-use tracking come with the admin API (M3).
+- Key lifecycle ([API_KEYS.md](API_KEYS.md)): *revoke* by removing the entry and reloading (`SIGHUP`, effective on the next request); *rotate* by adding the new key next to the old one, moving clients over, then removing the old one, with no downtime; *expire* with `expires_at` (refused from that instant, named in the logs, counted in metrics). Each key and each OIDC group mapping carries a `max_classification` clearance, enforced against the label of every request ([data classification](#data-classification)). Database-backed keys with last-use tracking come with the admin API (M3).
 - OIDC access tokens are verified locally and cannot be revoked before they expire: keep their lifetime short at the identity provider ([ADR-0002](adr/0002-generic-oidc.md)).
 - Admin API uses OIDC with MFA enforced at the IdP.
 
