@@ -458,3 +458,41 @@ func TestKeyExpiries(t *testing.T) {
 		t.Errorf("no expiring key: %+v", none)
 	}
 }
+
+func TestInspectionSection(t *testing.T) {
+	azure := map[string]string{"AZURE_KEY": "k"}
+	// On by default, with a per-process fingerprint key.
+	s, err := compile(t, validYAML, azure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Inspector == nil || !s.Inspector.Enabled() || !s.Inspector.EphemeralKey() || len(s.Inspector.Detectors()) == 0 {
+		t.Errorf("default inspector = %+v", s.Inspector)
+	}
+
+	s, err = compile(t, validYAML+"inspection:\n  budget: 20ms\n  fingerprint_key_env: FP_KEY\n", map[string]string{"AZURE_KEY": "k", "FP_KEY": "a-long-enough-secret-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Inspector.EphemeralKey() {
+		t.Error("a configured key must be used")
+	}
+
+	s, err = compile(t, validYAML+"inspection:\n  enabled: false\n", azure)
+	if err != nil || s.Inspector.Enabled() {
+		t.Errorf("inspection can be turned off explicitly: err = %v", err)
+	}
+
+	for name, section := range map[string]string{
+		"key variable unset": "inspection:\n  fingerprint_key_env: NOPE\n",
+		"budget too small":   "inspection:\n  budget: 1us\n",
+		"budget too large":   "inspection:\n  budget: 5m\n",
+	} {
+		if _, err := compile(t, validYAML+section, azure); err == nil || !strings.Contains(err.Error(), "inspection:") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	if _, err := Parse([]byte(validYAML + "inspection:\n  enabeld: false\n")); err == nil {
+		t.Error("a typo in the inspection section must be rejected")
+	}
+}

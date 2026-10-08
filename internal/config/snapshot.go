@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/bredda/tavian/internal/inspect"
 )
 
 // Snapshot is an immutable, validated view of the configuration, identified by
@@ -27,6 +29,8 @@ type Snapshot struct {
 	OIDC OIDCConfig
 	// DocsEnabled says whether the API reference is served.
 	DocsEnabled bool
+	// Inspector inspects request content; never nil.
+	Inspector *inspect.Engine
 
 	Backends map[string]*Backend
 	Models   map[string]*Model
@@ -91,6 +95,12 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		Models:      map[string]*Model{},
 		Keys:        map[string]*APIKey{},
 		Endpoints:   map[string]DestinationClass{},
+	}
+
+	if eng, err := inspect.New(cfg.Inspection, getenv); err != nil {
+		addf("inspection: %v", err)
+	} else {
+		s.Inspector = eng
 	}
 
 	s.OIDC = cfg.OIDC

@@ -9,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/inspect"
 )
 
 // Metrics holds the Prometheus instruments. Label values are drawn from small
@@ -19,6 +20,10 @@ type Metrics struct {
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
 	tokens   *prometheus.CounterVec
+
+	inspections *prometheus.CounterVec
+	findings    *prometheus.CounterVec
+	inspectTime prometheus.Histogram
 
 	eventsLost prometheus.Counter
 }
@@ -41,6 +46,19 @@ func NewMetrics() *Metrics {
 			Name: "tavian_tokens_total",
 			Help: "Tokens processed, by model, backend and direction (input|output).",
 		}, []string{"model", "backend", "direction"}),
+		inspections: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_inspections_total",
+			Help: "Request inspections, by status (ok|skipped|failed).",
+		}, []string{"status"}),
+		findings: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_inspection_findings_total",
+			Help: "Findings, by type and subtype. Never carries content.",
+		}, []string{"type", "subtype"}),
+		inspectTime: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "tavian_inspection_duration_seconds",
+			Help:    "Time spent inspecting a request.",
+			Buckets: []float64{.0001, .0005, .001, .0025, .005, .01, .025, .05, .1},
+		}),
 		eventsLost: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "tavian_usage_events_lost_total",
 			Help: "Usage events that could be neither stored nor spooled. Any increase is an audit gap.",
@@ -50,6 +68,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
+		m.inspections, m.findings, m.inspectTime,
 	)
 	return m
 }
@@ -130,5 +149,17 @@ func (c *keyExpiryCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(descKeyExpired, prometheus.GaugeValue, float64(len(e.Expired)))
 	if e.HasNext {
 		ch <- prometheus.MustNewConstMetric(descKeyNext, prometheus.GaugeValue, e.Next.Seconds())
+	}
+}
+
+// observeInspection records one inspection.
+func (m *Metrics) observeInspection(r inspect.Result) {
+	m.inspections.WithLabelValues(r.Status).Inc()
+	if r.Status == inspect.StatusSkipped {
+		return
+	}
+	m.inspectTime.Observe(r.Duration.Seconds())
+	for _, f := range r.Findings {
+		m.findings.WithLabelValues(string(f.Type), f.Subtype).Inc()
 	}
 }

@@ -47,6 +47,19 @@ log:
 #       allowed_models: ["llama-*"]
 #       # max_classification: internal  # clearance of this group (default internal); the highest of a person's groups applies
 
+# Content inspection looks for sensitive data (e-mail addresses today; more
+# detectors follow) in everything the caller sends, before anything leaves the
+# gateway. It is on by default and fails closed: a request that cannot be
+# inspected completely (a detector error, going over the budget, images or
+# other non-text parts) is refused, never served uninspected. Findings are
+# counted in the usage event; they never contain the matched text. Reloadable.
+# inspection:
+#   enabled: true
+#   budget: 50ms                         # for the whole request
+#   # Secret for the fingerprints of findings (>= 16 bytes). Without it a random
+#   # key is generated at startup, so fingerprints only correlate within one run.
+#   fingerprint_key_env: TAVIAN_FINGERPRINT_KEY
+
 # API reference (Scalar) at /docs and the OpenAPI description at /openapi.yaml,
 # served on the data port without authentication. Both are embedded in the
 # binary and work offline. They describe the API only. Default: enabled.

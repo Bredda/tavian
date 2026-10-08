@@ -181,6 +181,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	metrics := server.NewMetrics()
 	metrics.WatchAPIKeys(holder, time.Now)
 	logKeyExpiries(log, snap, time.Now())
+	logInspection(log, snap)
 	var authn auth.Authenticator = auth.APIKeyAuthenticator{Snap: holder}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -381,8 +382,23 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 	}
 	holder.Store(snap)
 	logKeyExpiries(log, snap, time.Now())
+	logInspection(log, snap)
 	log.Info("configuration reloaded", "revision", snap.Revision,
 		"backends", len(snap.Backends), "models", len(snap.Models))
+}
+
+// logInspection says how content inspection is set up, and warns about the
+// settings that weaken it.
+func logInspection(log *slog.Logger, snap *config.Snapshot) {
+	in := snap.Inspector
+	if !in.Enabled() {
+		log.Warn("content inspection is disabled: requests are served without being inspected")
+		return
+	}
+	if in.EphemeralKey() {
+		log.Warn("inspection.fingerprint_key_env is not set: finding fingerprints use a random key and only correlate within this process run")
+	}
+	log.Info("content inspection enabled", "detectors", len(in.Detectors()))
 }
 
 // keyExpiryWarning is how far ahead keys that are about to expire are named in

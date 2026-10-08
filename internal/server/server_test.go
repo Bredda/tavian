@@ -50,6 +50,7 @@ type fixtureSpec struct {
 	backend     http.Handler // nil: the mock backend
 	wrap        func(*meter.MemorySink) meter.Sink
 	deps        []func(*Deps)
+	snap        func(*config.Snapshot) // adjusts the compiled snapshot
 }
 
 func inflightLimit(n int) int {
@@ -116,6 +117,9 @@ api_keys:
 	snap, err := config.Compile(cfg, []byte(yaml), func(string) string { return "" })
 	if err != nil {
 		t.Fatal(err)
+	}
+	if spec.snap != nil {
+		spec.snap(snap)
 	}
 	holder := &config.Holder{}
 	holder.Store(snap)

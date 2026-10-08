@@ -28,6 +28,15 @@ test-db: ## Run the tests including PostgreSQL integration (starts a throwaway c
 	@until docker exec tavian-test-pg pg_isready -U postgres -d tavian >/dev/null 2>&1; do sleep 0.5; done
 	TAVIAN_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/tavian go test -race -count=1 ./... ; status=$$?; docker rm -f tavian-test-pg >/dev/null; exit $$status
 
+.PHONY: fuzz
+fuzz: ## Fuzz the request extractor and the inspection engine (FUZZTIME=30s each)
+	go test -run '^$$' -fuzz FuzzExtractChat -fuzztime $(or $(FUZZTIME),30s) ./internal/provider/openai
+	go test -run '^$$' -fuzz FuzzEngine -fuzztime $(or $(FUZZTIME),30s) ./internal/inspect
+
+.PHONY: bench
+bench: ## Benchmark content inspection
+	go test -run '^$$' -bench . -benchmem ./internal/inspect
+
 .PHONY: conformance
 conformance: ## Run the OpenAI SDK conformance suite (needs Python 3 and Node)
 	conformance/run.sh
