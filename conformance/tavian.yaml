@@ -1,0 +1,49 @@
+# Configuration used by the SDK conformance suite (conformance/run.sh).
+# Both API keys are PUBLIC test keys. Never reuse them anywhere real.
+#   full:   tav_YX9YFmBISettYgGG03tMcKMtUvuGYYZulSPV-sTe5hQ
+#   narrow: tav_0hsFppZ-OH4pNXREmkxGWw5xb1tAS_DrCE3JRlTIaKI
+profile: air-gapped
+
+listen:
+  data: "127.0.0.1:18080"
+  admin: "127.0.0.1:19090"
+
+log:
+  level: warn
+  format: text
+
+backends:
+  - id: mockllm
+    type: openai
+    base_url: http://127.0.0.1:18000/v1
+    destination_class: internal
+
+models:
+  - name: chat
+    type: chat
+    route:
+      - backend: mockllm
+        upstream_model: mock
+  - name: other
+    type: chat
+    route:
+      - backend: mockllm
+        upstream_model: mock
+  - name: broken
+    type: chat
+    route:
+      - backend: mockllm
+        upstream_model: mock-fail
+
+api_keys:
+  - id: full
+    hash: sha256:9c26fb8d4167e346facbfa5da4dbafdd0a71962c5e73f3dc9829339b36f35fab
+    team: conformance
+    application: sdk
+    # "ghost-*" lets the key ask for models that are not configured (404).
+    allowed_models: ["chat", "other", "broken", "ghost-*"]
+  - id: narrow
+    hash: sha256:ad3133986bb3a86cdbd590529d164f44fee2fb49206ab77ae5fe816ddb3cb3ed
+    team: conformance
+    application: sdk
+    allowed_models: ["chat"]

@@ -41,7 +41,7 @@ Progress (skeleton merged = ✓):
 - [ ] Generic OIDC bearer validation (JWKS cache with max staleness) behind the `Authenticator` interface
 - [x] PostgreSQL in the compose stack
 - [ ] Keycloak in the compose stack
-- [ ] Conformance tests against the OpenAI SDKs (non-streaming, streaming, tool calls)
+- [x] Conformance tests against the OpenAI SDKs (non-streaming, streaming, tool calls): `conformance/`, Python and Node, in CI
 
 ## M2 — The finance demo ("prove it")
 

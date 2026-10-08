@@ -1,0 +1,12 @@
+{
+  "name": "tavian-conformance-node",
+  "private": true,
+  "type": "module",
+  "description": "Runs the official OpenAI Node SDK against Tavian. See ../run.sh.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "openai": "7.30.1"
+  }
+}

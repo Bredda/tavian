@@ -11,6 +11,7 @@ make test        # unit tests with the race detector
 make lint        # golangci-lint
 make build       # binaries in ./bin
 make demo        # gateway + PostgreSQL + mock backend on localhost:8080, see README
+make conformance  # official OpenAI Python/Node SDKs against the gateway (needs Python 3, Node 20+)
 make test-db     # tests incl. PostgreSQL integration (needs Docker); plain `make test` skips them
 ```
 
