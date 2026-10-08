@@ -8,8 +8,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bredda/tavian/internal/audit"
+	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/inspect"
 	"github.com/bredda/tavian/internal/mockllm"
 	"github.com/bredda/tavian/internal/policy"
 )
@@ -152,7 +155,15 @@ func TestRedactDoesNotChangeTheRoute(t *testing.T) {
 func TestRedactionRefusesWhenItCannotBeComplete(t *testing.T) {
 	rec := newRecorder()
 	f := buildFixture(t, fixtureSpec{maxBody: 8 << 20, backend: rec, policies: []policy.Source{actionPolicy(
-		`        - { id: mask-emails, when: 'finding.subtype == "email"', action: redact }`)}})
+		`        - { id: mask-emails, when: 'finding.subtype == "email"', action: redact }`)}, snap: func(s *config.Snapshot) {
+		// a generous budget: this test is about the number of findings, not the
+		// speed of the machine (CI runs it with -race and coverage)
+		e, err := inspect.New(inspect.Config{Budget: 10 * time.Second}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Inspector = e
+	}})
 	// more findings than the engine keeps: some could not be replaced
 	resp, _ := f.chat(t, f.key, "llama-70b", strings.Repeat("u@b.example ", 1100))
 	if resp.StatusCode != http.StatusBadRequest || errorCode(t, resp) != "redaction_incomplete" {
