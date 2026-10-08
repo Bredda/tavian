@@ -12,6 +12,7 @@ linters:
     - misspell
     - noctx
     - sloglint
+    - forbidigo
   settings:
     errcheck:
       # Writing to an io.Writer we do not own (stdout/stderr, an HTTP response)
@@ -20,6 +21,18 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+    forbidigo:
+      # All outbound traffic goes through internal/egress (ADR-0008). Nothing
+      # else may dial, resolve names or use a ready-made HTTP client.
+      forbid:
+        - pattern: '^net\.(Dial|DialTimeout|DialTCP|DialUDP|DialIP|DialUnix|Dialer|Resolver|DefaultResolver|Lookup[A-Za-z]*)$'
+          msg: "outbound connections must go through internal/egress"
+        - pattern: '^tls\.(Dial|DialWithDialer|Dialer)$'
+          msg: "outbound connections must go through internal/egress"
+        - pattern: '^http\.(DefaultClient|DefaultTransport|Get|Head|Post|PostForm)$'
+          msg: "use the egress guard's HTTP client (guard.HTTPClient)"
+        - pattern: '^(pgx\.Connect|pgx\.ConnectConfig|pgxpool\.New|pgxpool\.NewWithConfig)$'
+          msg: "open database connections through internal/store, which dials through the egress guard"
     sloglint:
       no-mixed-args: false
       kv-only: false
@@ -28,7 +41,13 @@ linters:
     rules:
       # Tests may ignore errors on throwaway helpers and use plain http.Get.
       - path: _test\.go
-        linters: [errcheck, gosec, noctx, bodyclose]
+        linters: [errcheck, gosec, noctx, bodyclose, forbidigo]
+      # The two places that are allowed to dial: the guard itself, and the
+      # store, which only opens connections with the guard's dial function.
+      - path: internal/egress/
+        linters: [forbidigo]
+      - path: internal/store/
+        linters: [forbidigo]
 
 formatters:
   enable:

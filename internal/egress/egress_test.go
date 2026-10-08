@@ -167,3 +167,30 @@ func TestHTTPClientDoesNotFollowRedirectsOrUseProxy(t *testing.T) {
 		t.Errorf("status = %d, want the 302 to be handed back, not followed", resp.StatusCode)
 	}
 }
+
+func TestPinnedEndpointIsAllowedAndMustBeInternal(t *testing.T) {
+	host, port := listener(t) // 127.0.0.1, internal
+	// No endpoint in the snapshot: only the pin lets the dial through.
+	g := newGuard(t, config.ProfileAirGapped, map[string]config.DestinationClass{})
+	g.Pin("DB.internal:" + port)
+	stubLookup(g, "db.internal", host)
+	conn, err := g.DialContext(context.Background(), "tcp", "db.internal:"+port)
+	if err != nil {
+		t.Fatalf("pinned internal endpoint refused: %v", err)
+	}
+	_ = conn.Close()
+
+	// The same name resolving outside the internal ranges is refused, even
+	// under a profile that allows external backends: a database is never external.
+	open := newGuard(t, config.ProfileOpenEgress, map[string]config.DestinationClass{})
+	open.Pin("db.internal:" + port)
+	stubLookup(open, "db.internal", "8.8.8.8")
+	if _, err := open.DialContext(context.Background(), "tcp", "db.internal:"+port); !errors.Is(err, ErrDestinationNotAllowed) {
+		t.Errorf("err = %v, want ErrDestinationNotAllowed", err)
+	}
+
+	// Pinning one endpoint does not open the others.
+	if _, err := g.DialContext(context.Background(), "tcp", "other.internal:"+port); !errors.Is(err, ErrDestinationNotAllowed) {
+		t.Errorf("unpinned endpoint: err = %v", err)
+	}
+}

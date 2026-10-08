@@ -115,9 +115,6 @@ func cmdMigrate(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cfg, raw, err := config.Load(*path)
-	if err == nil {
-		_, err = config.Compile(cfg, raw, os.Getenv)
-	}
 	if err == nil && cfg.Database.URLEnv == "" {
 		err = errors.New("database.url_env is not set in the configuration")
 	}
@@ -127,7 +124,14 @@ func cmdMigrate(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	st, err := store.Open(ctx, os.Getenv(cfg.Database.URLEnv))
+	snap, err := config.Compile(cfg, raw, os.Getenv)
+	if err != nil {
+		fmt.Fprintln(stderr, "tavian:", err)
+		return 1
+	}
+	holder := &config.Holder{}
+	holder.Store(snap)
+	st, err := openStore(ctx, cfg, holder)
 	if err != nil {
 		fmt.Fprintln(stderr, "tavian:", err)
 		return 1
@@ -193,7 +197,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		close(flushed)
 	} else {
 		var outbox *meter.OutboxSink
-		st, outbox, err = openStorage(ctx, cfg.Database, snap, raw, log)
+		st, outbox, err = openStorage(ctx, cfg.Database, guard, snap, raw, log)
 		if err != nil {
 			log.Error("storage", "error", err)
 			return 1
@@ -290,10 +294,32 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	return code
 }
 
+// openStore connects to PostgreSQL through an egress guard of its own; used by
+// commands that do not run the gateway.
+func openStore(ctx context.Context, cfg *config.Config, holder *config.Holder) (*store.Store, error) {
+	guard, err := egress.New(cfg.Profile, holder, cfg.Egress.InternalCIDRs)
+	if err != nil {
+		return nil, err
+	}
+	return connectStore(ctx, cfg.Database, guard)
+}
+
+// connectStore declares the database endpoints to the guard (always internal)
+// and connects through it.
+func connectStore(ctx context.Context, db config.DatabaseConfig, guard *egress.Guard) (*store.Store, error) {
+	url := os.Getenv(db.URLEnv)
+	endpoints, err := store.Endpoints(url)
+	if err != nil {
+		return nil, err
+	}
+	guard.Pin(endpoints...)
+	return store.Open(ctx, url, guard.DialContext)
+}
+
 // openStorage connects, insists on an up-to-date schema, records the running
 // configuration revision and prepares the usage-event sink.
-func openStorage(ctx context.Context, db config.DatabaseConfig, snap *config.Snapshot, raw []byte, log *slog.Logger) (*store.Store, *meter.OutboxSink, error) {
-	st, err := store.Open(ctx, os.Getenv(db.URLEnv))
+func openStorage(ctx context.Context, db config.DatabaseConfig, guard *egress.Guard, snap *config.Snapshot, raw []byte, log *slog.Logger) (*store.Store, *meter.OutboxSink, error) {
+	st, err := connectStore(ctx, db, guard)
 	if err != nil {
 		return nil, nil, err
 	}
