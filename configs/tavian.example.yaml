@@ -23,6 +23,12 @@ log:
   level: info                  # debug | info | warn | error
   format: json                 # json | text
 
+# API reference (Scalar) at /docs and the OpenAPI description at /openapi.yaml,
+# served on the data port without authentication. Both are embedded in the
+# binary and work offline. They describe the API only. Default: enabled.
+# docs:
+#   enabled: false
+
 # PostgreSQL records usage events (transactional outbox) and every configuration
 # revision. Without this section the gateway only logs events: development only.
 # Create the schema with:  tavian migrate -config tavian.yaml

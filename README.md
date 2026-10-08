@@ -27,11 +27,11 @@ curl -s localhost:8080/v1/chat/completions \
 make demo-down
 ```
 
-The key above is public and for the demo only (`tavian keygen` makes real ones). Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml).
+The key above is public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml).
 
 ## What works today (M1 skeleton)
 
-API-key authentication with per-key model allow-lists · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics. Content inspection, policy, quotas and OIDC are next; see the [roadmap](docs/ROADMAP.md).
+API-key authentication with per-key model allow-lists · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection, policy, quotas and OIDC are next; see the [roadmap](docs/ROADMAP.md).
 
 ## Development
 

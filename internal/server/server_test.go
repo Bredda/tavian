@@ -8,8 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
@@ -444,5 +447,63 @@ func TestReadyzReflectsAuditTrail(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("readyz = %d, want 503 when events cannot be recorded", resp.StatusCode)
+	}
+}
+
+// Every data-plane operation in the OpenAPI description must be routed: this
+// catches the spec drifting from the handlers.
+func TestOpenAPIOperationsAreRouted(t *testing.T) {
+	f := newFixture(t, 1<<20)
+	resp, err := http.Get(f.gw.URL + "/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/openapi.yaml = %d", resp.StatusCode)
+	}
+	var doc struct {
+		Paths map[string]map[string]struct {
+			Tags []string `yaml:"tags"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for path, ops := range doc.Paths {
+		for method, op := range ops {
+			if slices.Contains(op.Tags, "Operations") { // served by the admin listener
+				continue
+			}
+			req, _ := http.NewRequest(strings.ToUpper(method), f.gw.URL+path, nil)
+			r, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Body.Close()
+			// No key: a routed operation answers 401, an unrouted one 404/405.
+			if r.StatusCode != http.StatusUnauthorized {
+				t.Errorf("%s %s answered %d without a key, want 401: is it routed?", method, path, r.StatusCode)
+			}
+			checked++
+		}
+	}
+	if checked < 2 {
+		t.Errorf("only %d operations checked", checked)
+	}
+}
+
+func TestDocsServedByDefaultWithoutAuth(t *testing.T) {
+	f := newFixture(t, 1<<20)
+	for _, p := range []string{"/docs", "/docs/scalar.js", "/openapi.yaml"} {
+		resp, err := http.Get(f.gw.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s = %d, want 200", p, resp.StatusCode)
+		}
 	}
 }

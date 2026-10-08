@@ -14,6 +14,8 @@ make demo        # gateway + PostgreSQL + mock backend on localhost:8080, see RE
 make test-db     # tests incl. PostgreSQL integration (needs Docker); plain `make test` skips them
 ```
 
+The API reference is `internal/docs/openapi.yaml` (hand-written; a test checks that its operations are routed, so update it with any API change) plus a vendored Scalar bundle, refreshed with `scripts/update-scalar.sh <version>`.
+
 No Go toolchain? The CI uses the same commands; locally you can run them through the `golang` Docker image.
 
 ## Workflow: trunk-based

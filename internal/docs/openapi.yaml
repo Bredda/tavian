@@ -1,0 +1,369 @@
+openapi: 3.1.0
+info:
+  title: Tavian API
+  version: "{{VERSION}}"
+  summary: OpenAI-compatible gateway to your own model backends.
+  description: |
+    Tavian sits between your applications and your model backends (vLLM,
+    llama.cpp, or any OpenAI-compatible server). Point an OpenAI SDK at this
+    server's `/v1` and use a Tavian API key: nothing else changes.
+
+    ```python
+    from openai import OpenAI
+    client = OpenAI(base_url="http://localhost:8080/v1", api_key="tav_...")
+    ```
+
+    ## What differs from OpenAI
+
+    - **Model names are Tavian's.** `GET /v1/models` lists the names your key
+      may use; Tavian maps each to a backend and the backend's own model name.
+    - **Keys carry an allow-list of models.** A key may only use the models it
+      was granted (`403 model_not_allowed` otherwise, and they are filtered out
+      of `/v1/models`).
+    - **Your key is never forwarded.** The backend is called with Tavian's own
+      credential, if it needs one.
+    - **Usage is always metered.** For streamed responses Tavian turns on
+      `stream_options.include_usage` itself, so token counts are recorded
+      whatever the client asked. The extra final usage chunk is relayed to you.
+    - **Unknown request fields are passed through** to the backend untouched.
+    - Every response carries an `X-Request-Id` header. Send your own
+      `X-Request-Id` to correlate; it is kept if it is a plain identifier.
+
+    Prompts and completions are never written to Tavian's logs or usage events.
+
+    ## Authentication
+
+    `Authorization: Bearer <key>`. Keys are issued by the operator
+    (`tavian keygen` produces one and the hash to put in the configuration).
+    Use the **Authentication** panel of this page to try requests.
+
+    ## Operations endpoints
+
+    Health, readiness and metrics are served on the **admin listener**
+    (default `127.0.0.1:9090`), not on this port, and need no key. They are
+    listed under *Operations*.
+  license:
+    name: Apache 2.0
+    identifier: Apache-2.0
+servers:
+  - url: /
+    description: This server
+tags:
+  - name: Chat
+    description: Chat completions.
+  - name: Models
+    description: Models available to the calling key.
+  - name: Operations
+    description: Health and metrics, served on the admin listener.
+security:
+  - bearerAuth: []
+paths:
+  /v1/models:
+    get:
+      tags: [Models]
+      operationId: listModels
+      summary: List models
+      description: The models the calling key is allowed to use.
+      responses:
+        "200":
+          description: The list of models.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelList" }
+              example:
+                object: list
+                data:
+                  - { id: llama-70b, object: model, created: 1760000000, owned_by: tavian }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/NotReady" }
+  /v1/chat/completions:
+    post:
+      tags: [Chat]
+      operationId: createChatCompletion
+      summary: Create a chat completion
+      description: |
+        OpenAI-compatible. With `"stream": true` the response is a
+        `text/event-stream` of `chat.completion.chunk` objects ending with
+        `data: [DONE]`.
+
+        Errors raised by the model backend itself (for example a 400 for an
+        unsupported parameter) are relayed with the backend's status and body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatCompletionRequest" }
+            examples:
+              simple:
+                summary: Simple request
+                value:
+                  model: llama-70b
+                  messages:
+                    - { role: system, content: You are a concise assistant. }
+                    - { role: user, content: Say hello in one word. }
+              streaming:
+                summary: Streaming request
+                value:
+                  model: llama-70b
+                  stream: true
+                  messages:
+                    - { role: user, content: Count to three. }
+      responses:
+        "200":
+          description: The completion, or a stream of chunks.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatCompletion" }
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Server-sent events. Each `data:` line is a JSON
+                  `chat.completion.chunk`; the stream ends with `data: [DONE]`.
+        "400": { $ref: "#/components/responses/InvalidRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ModelNotAllowed" }
+        "404": { $ref: "#/components/responses/ModelNotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "502": { $ref: "#/components/responses/UpstreamUnavailable" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /healthz:
+    get:
+      tags: [Operations]
+      operationId: healthz
+      summary: Liveness
+      description: Returns `ok` while the process is running.
+      security: []
+      servers:
+        - url: http://127.0.0.1:9090
+          description: Admin listener (`listen.admin`)
+      responses:
+        "200":
+          description: Alive.
+          content:
+            text/plain: { schema: { type: string, example: "ok" } }
+  /readyz:
+    get:
+      tags: [Operations]
+      operationId: readyz
+      summary: Readiness
+      description: |
+        `200` when a configuration is loaded and the audit trail can record
+        usage events. `503` otherwise, including when PostgreSQL has been
+        unavailable long enough to fill the local spool: Tavian then refuses
+        requests rather than serve them unrecorded.
+      security: []
+      servers:
+        - url: http://127.0.0.1:9090
+          description: Admin listener (`listen.admin`)
+      responses:
+        "200":
+          description: Ready.
+          content:
+            text/plain: { schema: { type: string, example: "ready" } }
+        "503":
+          description: Not ready.
+          content:
+            text/plain: { schema: { type: string } }
+  /metrics:
+    get:
+      tags: [Operations]
+      operationId: metrics
+      summary: Prometheus metrics
+      description: Request counts and latencies, token counters, storage and spool state.
+      security: []
+      servers:
+        - url: http://127.0.0.1:9090
+          description: Admin listener (`listen.admin`)
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            text/plain: { schema: { type: string } }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A Tavian API key (`tav_...`).
+  headers:
+    RequestId:
+      description: Identifier of this request, also present in Tavian's logs and usage events.
+      schema: { type: string }
+  schemas:
+    ModelList:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Model" }
+    Model:
+      type: object
+      required: [id, object, created, owned_by]
+      properties:
+        id: { type: string, description: Name to pass as `model`., example: llama-70b }
+        object: { type: string, const: model }
+        created: { type: integer, description: Unix time the current configuration was loaded. }
+        owned_by: { type: string, const: tavian }
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      additionalProperties: true
+      description: |
+        Only `model` is interpreted by Tavian; everything else is forwarded to
+        the backend, so any parameter your backend supports can be used. The
+        fields below are the common ones.
+      properties:
+        model:
+          type: string
+          description: A model name from `GET /v1/models`.
+          example: llama-70b
+        messages:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/Message" }
+        stream:
+          type: boolean
+          default: false
+        temperature: { type: number, minimum: 0, maximum: 2 }
+        top_p: { type: number, minimum: 0, maximum: 1 }
+        max_tokens: { type: integer, minimum: 1 }
+        max_completion_tokens: { type: integer, minimum: 1 }
+        stop:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: string } }
+        seed: { type: integer }
+        tools:
+          type: array
+          description: Function tools the model may call (passed through).
+          items: { type: object, additionalProperties: true }
+        tool_choice:
+          description: Passed through.
+        response_format:
+          type: object
+          additionalProperties: true
+          description: 'Passed through, for example `{"type": "json_object"}`.'
+    Message:
+      type: object
+      required: [role]
+      additionalProperties: true
+      properties:
+        role:
+          type: string
+          enum: [system, developer, user, assistant, tool]
+        content:
+          description: Text, or an array of content parts if the backend supports them.
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: object, additionalProperties: true } }
+            - { type: "null" }
+        name: { type: string }
+        tool_calls:
+          type: array
+          items: { type: object, additionalProperties: true }
+        tool_call_id: { type: string }
+    ChatCompletion:
+      type: object
+      additionalProperties: true
+      description: The backend's response, relayed as is.
+      required: [id, object, choices]
+      properties:
+        id: { type: string }
+        object: { type: string, example: chat.completion }
+        created: { type: integer }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              index: { type: integer }
+              message: { $ref: "#/components/schemas/Message" }
+              finish_reason: { type: [string, "null"] }
+        usage: { $ref: "#/components/schemas/Usage" }
+    Usage:
+      type: object
+      additionalProperties: true
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type, code]
+          properties:
+            message: { type: string, description: Never contains request content. }
+            type:
+              type: string
+              enum: [invalid_request_error, server_error]
+            code:
+              type: string
+              description: Stable machine-readable code.
+            param: { type: [string, "null"] }
+  responses:
+    InvalidRequest:
+      description: |
+        Malformed request: invalid JSON, a missing `model`, or a field of the
+        wrong type. Code `invalid_request`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: { message: 'invalid request: missing "model"', type: invalid_request_error, code: invalid_request, param: null }
+    Unauthorized:
+      description: Missing or invalid API key. Code `invalid_api_key`.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, example: Bearer realm="tavian" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: { message: missing or invalid API key, type: invalid_request_error, code: invalid_api_key, param: null }
+    ModelNotAllowed:
+      description: The key may not use this model. Code `model_not_allowed`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ModelNotFound:
+      description: The model does not exist. Code `model_not_found`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooLarge:
+      description: The request body exceeds `limits.max_request_bytes`. Code `request_too_large`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UpstreamUnavailable:
+      description: The model backend could not be reached. Code `upstream_unavailable`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotReady:
+      description: The gateway has no configuration loaded yet. Code `not_ready`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: |
+        The gateway is not ready (`not_ready`) or cannot record the request
+        right now (`audit_unavailable`, with `Retry-After`). Retry later.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
