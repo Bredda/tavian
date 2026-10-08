@@ -2,10 +2,13 @@ package server
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/bredda/tavian/internal/config"
 )
 
 // Metrics holds the Prometheus instruments. Label values are drawn from small
@@ -92,4 +95,40 @@ func (m *Metrics) WatchInflight(inflight func() float64) {
 		Name: "tavian_inflight_requests",
 		Help: "API requests being handled right now (limits.max_inflight caps this).",
 	}, inflight))
+}
+
+// WatchAPIKeys exposes API key expiry from the current configuration (so a
+// reload is reflected at the next scrape). Key ids are not labels: the logs
+// name the keys, the metrics say whether to look.
+func (m *Metrics) WatchAPIKeys(snap *config.Holder, now func() time.Time) {
+	m.reg.MustRegister(&keyExpiryCollector{snap: snap, now: now})
+}
+
+var (
+	descKeyNext = prometheus.NewDesc("tavian_api_keys_next_expiry_seconds",
+		"Seconds until the nearest expiry among API keys that have not expired yet; absent if no key expires.", nil, nil)
+	descKeyExpired = prometheus.NewDesc("tavian_api_keys_expired",
+		"Configured API keys past their expires_at (refused with 401).", nil, nil)
+)
+
+type keyExpiryCollector struct {
+	snap *config.Holder
+	now  func() time.Time
+}
+
+func (c *keyExpiryCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- descKeyNext
+	ch <- descKeyExpired
+}
+
+func (c *keyExpiryCollector) Collect(ch chan<- prometheus.Metric) {
+	s := c.snap.Load()
+	if s == nil {
+		return
+	}
+	e := s.KeyExpiries(c.now(), 0)
+	ch <- prometheus.MustNewConstMetric(descKeyExpired, prometheus.GaugeValue, float64(len(e.Expired)))
+	if e.HasNext {
+		ch <- prometheus.MustNewConstMetric(descKeyNext, prometheus.GaugeValue, e.Next.Seconds())
+	}
 }

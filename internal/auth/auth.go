@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/glob"
@@ -56,7 +57,10 @@ type Identity struct {
 	Team          string
 	Application   string
 	AllowedModels []string
-	Method        string // "api_key" | "oidc"
+	// MaxClassification is the most sensitive label of data the caller is
+	// cleared to send.
+	MaxClassification config.Classification
+	Method            string // "api_key" | "oidc"
 }
 
 // CanUseModel reports whether the identity may request the named model.
@@ -71,7 +75,10 @@ type Authenticator interface {
 
 // APIKeyAuthenticator validates `Authorization: Bearer <key>` against the keys
 // of the current config snapshot.
-type APIKeyAuthenticator struct{ Snap *config.Holder }
+type APIKeyAuthenticator struct {
+	Snap *config.Holder
+	Now  func() time.Time // for tests; defaults to time.Now
+}
 
 func (a APIKeyAuthenticator) Authenticate(r *http.Request) (*Identity, error) {
 	s := a.Snap.Load()
@@ -86,12 +93,20 @@ func (a APIKeyAuthenticator) Authenticate(r *http.Request) (*Identity, error) {
 	if !ok {
 		return nil, unauthenticated("unknown API key")
 	}
+	now := time.Now
+	if a.Now != nil {
+		now = a.Now
+	}
+	if !k.ExpiresAt.IsZero() && !now().Before(k.ExpiresAt) {
+		return nil, unauthenticated("API key " + k.ID + " expired")
+	}
 	return &Identity{
-		KeyID:         k.ID,
-		Team:          k.Team,
-		Application:   k.Application,
-		AllowedModels: k.AllowedModels,
-		Method:        "api_key",
+		KeyID:             k.ID,
+		Team:              k.Team,
+		Application:       k.Application,
+		AllowedModels:     k.AllowedModels,
+		MaxClassification: k.MaxClassification,
+		Method:            "api_key",
 	}, nil
 }
 

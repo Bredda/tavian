@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -691,4 +692,42 @@ func grepLines(s, sub string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+func TestAPIKeyExpiryMetrics(t *testing.T) {
+	now := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	holder := &config.Holder{}
+	holder.Store(&config.Snapshot{Keys: map[string]*config.APIKey{
+		"1": {ID: "never"},
+		"2": {ID: "gone", ExpiresAt: now.Add(-time.Hour)},
+		"3": {ID: "soon", ExpiresAt: now.Add(36 * time.Hour)},
+	}})
+	m := NewMetrics()
+	m.WatchAPIKeys(holder, func() time.Time { return now })
+	srv := httptest.NewServer(m.Handler())
+	defer srv.Close()
+	scrape := func() string {
+		resp, err := http.Get(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+
+	out := scrape()
+	if !strings.Contains(out, "tavian_api_keys_expired 1") || !strings.Contains(out, "tavian_api_keys_next_expiry_seconds 129600") {
+		t.Errorf("metrics:\n%s", grepLines(out, "tavian_api_keys"))
+	}
+	if strings.Contains(out, "soon") || strings.Contains(out, "gone") {
+		t.Error("key ids must not appear in metrics")
+	}
+
+	// A reload that removes the expiring keys is visible at the next scrape.
+	holder.Store(&config.Snapshot{Keys: map[string]*config.APIKey{"1": {ID: "never"}}})
+	out = scrape()
+	if !strings.Contains(out, "tavian_api_keys_expired 0") || strings.Contains(out, "next_expiry_seconds ") {
+		t.Errorf("after reload:\n%s", grepLines(out, "tavian_api_keys"))
+	}
 }

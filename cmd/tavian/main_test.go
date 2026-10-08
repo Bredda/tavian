@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
@@ -140,5 +141,33 @@ func TestSameOIDCConnectionIgnoresOnlyMappings(t *testing.T) {
 		if sameOIDCConnection(base, changed) {
 			t.Errorf("a change of %s must require a restart", name)
 		}
+	}
+}
+
+func TestLogKeyExpiriesNamesKeysButNotTheirSecrets(t *testing.T) {
+	now := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	snap := &config.Snapshot{Keys: map[string]*config.APIKey{
+		"hash-of-gone": {ID: "gone", ExpiresAt: now.Add(-time.Hour)},
+		"hash-of-soon": {ID: "soon", ExpiresAt: now.Add(24 * time.Hour)},
+		"hash-of-far":  {ID: "far", ExpiresAt: now.Add(365 * 24 * time.Hour)},
+		"hash-of-none": {ID: "none"},
+	}}
+	var buf bytes.Buffer
+	logKeyExpiries(slog.New(slog.NewTextHandler(&buf, nil)), snap, now)
+	out := buf.String()
+	for _, want := range []string{"refused", "gone", "expire within 14 days", "soon"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log lacks %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"far", "none", "hash-of"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("log mentions %q:\n%s", unwanted, out)
+		}
+	}
+	buf.Reset()
+	logKeyExpiries(slog.New(slog.NewTextHandler(&buf, nil)), &config.Snapshot{}, now)
+	if buf.Len() != 0 {
+		t.Errorf("nothing to say, got %q", buf.String())
 	}
 }

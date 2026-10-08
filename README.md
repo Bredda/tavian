@@ -27,7 +27,7 @@ curl -s localhost:8080/v1/chat/completions \
 make demo-down
 ```
 
-The key above is public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml).
+The key above is public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
 
 ### Sign in with OIDC
 

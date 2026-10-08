@@ -540,3 +540,28 @@ func TestChainRoutesByCredential(t *testing.T) {
 		t.Errorf("token without OIDC configured: %v", err)
 	}
 }
+
+func TestOIDCClearanceIsTheHighestOfTheGroups(t *testing.T) {
+	rs := rsaSigner(t, "rs-1")
+	f := newFakeIdP(t, rs.public())
+	v, _ := newVerifier(t, f, oidcConfig())
+	a := OIDCAuthenticator{Verifier: v, Snap: holderWith(t,
+		config.OIDCMapping{Group: "staff", Team: "t", AllowedModels: []string{"m"}, MaxClassification: config.LabelInternal},
+		config.OIDCMapping{Group: "finance", Team: "t", AllowedModels: []string{"m"}, MaxClassification: config.LabelRestricted},
+		config.OIDCMapping{Group: "interns", Team: "t", AllowedModels: []string{"m"}, MaxClassification: config.LabelPublic},
+	)}
+	for groups, want := range map[string]config.Classification{
+		"staff,interns":         config.LabelInternal,
+		"interns,finance,staff": config.LabelRestricted,
+		"interns":               config.LabelPublic,
+		"nobody":                config.LabelPublic, // no mapping: no model either
+	} {
+		id, err := a.Authenticate(request(rs.sign(t, goodClaims(), map[string]any{"groups": strings.Split(groups, ",")})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id.MaxClassification != want {
+			t.Errorf("groups %s: clearance %q, want %q", groups, id.MaxClassification, want)
+		}
+	}
+}

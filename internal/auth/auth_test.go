@@ -3,8 +3,10 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bredda/tavian/internal/config"
 )
@@ -83,5 +85,49 @@ func TestGenerateKey(t *testing.T) {
 	}
 	if h1 != "sha256:"+HashKey(k1) {
 		t.Error("config hash must match HashKey")
+	}
+}
+
+func TestExpiredAPIKeyIsRefused(t *testing.T) {
+	key, hash, _ := GenerateKey()
+	expiry := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	holder := &config.Holder{}
+	holder.Store(&config.Snapshot{Keys: map[string]*config.APIKey{
+		hash[len("sha256:"):]: {ID: "svc", Team: "t", Application: "a", AllowedModels: []string{"*"}, ExpiresAt: expiry, MaxClassification: config.LabelConfidential},
+	}})
+	req := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		r.Header.Set("Authorization", "Bearer "+key)
+		return r
+	}
+	at := func(now time.Time) APIKeyAuthenticator {
+		return APIKeyAuthenticator{Snap: holder, Now: func() time.Time { return now }}
+	}
+
+	id, err := at(expiry.Add(-time.Second)).Authenticate(req())
+	if err != nil {
+		t.Fatalf("a key before its expiry must work: %v", err)
+	}
+	if id.MaxClassification != config.LabelConfidential {
+		t.Errorf("clearance = %q", id.MaxClassification)
+	}
+	// The instant itself is already too late: expires_at is exclusive.
+	for _, now := range []time.Time{expiry, expiry.Add(time.Hour)} {
+		_, err := at(now).Authenticate(req())
+		if !errors.Is(err, ErrUnauthenticated) || Reason(err) != "API key svc expired" {
+			t.Errorf("at %v: err = %v, reason %q", now, err, Reason(err))
+		}
+	}
+}
+
+func TestKeyWithoutExpiryNeverExpires(t *testing.T) {
+	key, hash, _ := GenerateKey()
+	holder := &config.Holder{}
+	holder.Store(&config.Snapshot{Keys: map[string]*config.APIKey{hash[len("sha256:"):]: {ID: "svc", AllowedModels: []string{"*"}}}})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer "+key)
+	far := APIKeyAuthenticator{Snap: holder, Now: func() time.Time { return time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC) }}
+	if _, err := far.Authenticate(r); err != nil {
+		t.Errorf("err = %v", err)
 	}
 }

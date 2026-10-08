@@ -78,5 +78,8 @@ func compileOIDC(cfg *Config, s *Snapshot, addf func(string, ...any)) {
 		if len(m.AllowedModels) == 0 {
 			addf("%s: allowed_models must list at least one pattern", where)
 		}
+		if m.MaxClassification.Rank() < 0 {
+			addf("%s: unknown max_classification %q", where, m.MaxClassification)
+		}
 	}
 }
