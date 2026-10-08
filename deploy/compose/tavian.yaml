@@ -1,7 +1,7 @@
 # Demo configuration. The API key below is PUBLIC and for this demo only:
 #   tav_VavQsTNlrxWVesBv7GinuMLhYBbmhns_YNloIcWS3UI
 # Generate your own with `tavian keygen`.
-profile: air-gapped
+profile: controlled-egress
 
 listen:
   data: ":8080"
@@ -27,16 +27,39 @@ oidc:
       allowed_models: ["demo-*"]
 
 backends:
+  # The on-prem backend.
   - id: mockllm
     type: openai
     base_url: http://mockllm:8000/v1
     destination_class: internal
+  # Stands for an approved external provider: it may receive data up to
+  # `internal` and nothing more sensitive (max_classification defaults to that
+  # for this class). In this demo it is another mock on the same private network.
+  - id: partner-eu
+    type: openai
+    base_url: http://mockllm-external:8000/v1
+    destination_class: approved-external
 
 models:
   - name: demo-chat
     type: chat
     route:
       - backend: mockllm
+        upstream_model: mock
+  # Served by both: the external provider is preferred, but data that is
+  # `confidential` or above only ever goes to the on-prem backend.
+  - name: demo-shared
+    type: chat
+    route:
+      - backend: partner-eu
+        upstream_model: mock
+      - backend: mockllm
+        upstream_model: mock
+  # Only available externally: refused for sensitive data.
+  - name: demo-partner
+    type: chat
+    route:
+      - backend: partner-eu
         upstream_model: mock
 
 api_keys:
@@ -45,3 +68,11 @@ api_keys:
     team: demo-team
     application: curl
     allowed_models: ["demo-*"]
+  # An application cleared to send confidential data (IBANs, card numbers,
+  # social security numbers). The key is public and for the demo only.
+  - id: demo-finance
+    hash: sha256:335007ff677615fd7b9965b5197191e82893281220cf6729cca1c10968038ffd
+    team: finance
+    application: ledger
+    allowed_models: ["demo-*"]
+    max_classification: confidential

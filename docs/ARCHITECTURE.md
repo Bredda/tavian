@@ -72,13 +72,15 @@ Usage events and audit records are written to an **outbox table in PostgreSQL** 
                     (today: in-flight cap `limits.max_inflight`; M2: RPM, concurrency per scope)
  4  authorize        RBAC: may this principal call this API and this model alias?
  5  normalize        parse into an internal request representation (messages, tools, params)
- 6  inspect (req)    detectors → findings (built; classification label: M2)
+ 6  inspect (req)    detectors → findings; then the classification label (built)
  7  policy (phase A) inputs: identity, model, label, findings → constraints:
-                       allowed destination classes, required transforms (redact), or deny
+                       allowed destination classes (built; the label must fit the caller's
+                       clearance), required transforms (redact) and rules: with the policy engine
  8  transform        apply redactions if required
- 9  route            model alias → candidate backends, filtered by constraints, health,
-                       capabilities, context window → strategy picks one
-10  policy (phase B) assertion: chosen backend satisfies constraints (defence in depth)
+ 9  route            model alias → candidate backends, filtered by constraints (built:
+                       first allowed target of the route); health, capabilities,
+                       context window and strategies: M3
+10  policy (phase B) assertion: chosen backend satisfies constraints (defence in depth, built)
 11  quota reserve    TPM / tokens-per-day / budget reservation using estimated usage
 12  call provider    through the egress guard (internal backends use the same dialer path)
 13  relay response   stream pass-through; response inspection per policy (see below)
@@ -165,7 +167,7 @@ cmd/mockllm/               ✓ fake OpenAI-compatible backend for demos and test
 internal/config/           ✓ strict YAML → validated, immutable Snapshot; profile rules; Holder
 internal/auth/             ✓ API keys and OIDC access tokens (JWKS cache) → Identity
 internal/egress/           ✓ the only outbound dialer: allow-list + internal-address enforcement
-internal/router/           ✓ model → backend (first target; strategies and health later)
+internal/router/           ✓ model → backend (first target allowed by the constraints; strategies and health later)
 internal/provider/openai/  ✓ OpenAI-compatible adapter: streaming relay + usage extraction
 internal/meter/            ✓ multi-dimensional UsageEvent + sinks: PostgreSQL outbox with disk spool, log sink (dev)
 internal/server/           ✓ data-plane and admin HTTP handlers, middleware, Prometheus metrics

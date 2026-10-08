@@ -38,7 +38,13 @@ type Deps struct {
 	Sink     meter.Sink
 	Log      *slog.Logger
 	Metrics  *Metrics
+	// Route picks the backend of a request; nil means router.Resolve. Tests
+	// replace it to check that phase B catches a faulty router.
+	Route RouteFunc
 }
+
+// RouteFunc is the signature of router.Resolve.
+type RouteFunc func(*config.Snapshot, string, policy.Constraints) (router.Route, []router.Candidate, error)
 
 type ctxKey struct{}
 
@@ -134,6 +140,7 @@ type call struct {
 	model      string
 	inspection *inspect.Result
 	class      *policy.Classification
+	candidates []router.Candidate
 }
 
 // record starts the decision record of c.
@@ -155,6 +162,9 @@ func (c *call) record(ctx context.Context, outcome string, reason audit.Reason, 
 	}
 	if c.inspection != nil {
 		rec.WithInspection(*c.inspection)
+	}
+	for _, cand := range c.candidates {
+		rec.Candidates = append(rec.Candidates, audit.Candidate{Backend: cand.Backend, Excluded: cand.Excluded})
 	}
 	if c.class != nil {
 		rec.Label = string(c.class.Label)
@@ -273,19 +283,36 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 			"this request is classified "+string(class.Label)+", above the "+string(id.MaxClassification)+" your credentials are cleared to send", "clearance_exceeded")
 	}
 
-	// TODO(M2): policy phase A -> constraints (allowed destinations, redactions).
+	// policy phase A: where may a request with this label go?
+	constraints := policy.ConstraintsFor(class.Label)
 
-	// route
-	route, err := router.Resolve(snap, model)
-	if err != nil {
+	// route, among the backends of the model that the constraints allow
+	resolve := s.Route
+	if resolve == nil {
+		resolve = router.Resolve
+	}
+	route, candidates, err := resolve(snap, model, constraints)
+	c.candidates = candidates
+	switch {
+	case errors.Is(err, router.ErrUnknownModel):
 		return s.refuse(ctx, w, c, audit.ModelNotFound, "the requested model does not exist", "model_not_found")
+	case errors.Is(err, router.ErrNoEligibleBackend):
+		return s.refuse(ctx, w, c, audit.NoEligibleBackend,
+			"no backend serving this model may receive a request classified "+string(class.Label), "no_eligible_backend")
+	case err != nil:
+		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_error")
 	}
 	upstreamBody, err := openai.RewriteChat(raw, route.UpstreamModel)
 	if err != nil {
 		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
 
-	// TODO(M2): policy phase B (assert the chosen backend satisfies constraints).
+	// policy phase B: defence in depth, the chosen backend must satisfy the
+	// constraints whatever routing did.
+	if err := policy.Assert(class.Label, route.Backend); err != nil {
+		s.Log.ErrorContext(ctx, "routing violated the policy constraints", "error", err)
+		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_assertion_failed")
+	}
 	// TODO(M2): quota reserve (tpm / budget) using the backend's price.
 
 	// call provider and relay the response

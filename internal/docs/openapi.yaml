@@ -377,8 +377,12 @@ components:
       description: |
         The caller may not use this model (code `model_not_allowed`), or the
         request is classified above what their credentials are cleared to send
-        (code `classification_exceeds_clearance`; the message names the label,
-        never the content).
+        (code `classification_exceeds_clearance`), or no backend serving the
+        model may receive a request with this classification (code
+        `no_eligible_backend`, for example a model that only exists at an
+        external provider and a request containing an IBAN). The message names
+        the label, never the content; the decision record says which backends
+        were considered and why each was set aside.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

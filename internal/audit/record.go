@@ -34,6 +34,13 @@ type LabelSources struct {
 	Inferred string `json:"inferred,omitempty"`
 }
 
+// Candidate is a backend that routing considered for a request. Excluded is
+// why it was set aside (a policy exclusion code), empty for the one chosen.
+type Candidate struct {
+	Backend  string `json:"backend"`
+	Excluded string `json:"excluded,omitempty"`
+}
+
 // DecisionRecord is written once for every authenticated chat request, refused
 // ones included. Requests refused before the caller is known (bad
 // credentials, overload) leave metrics and logs only: recording them would let
@@ -58,6 +65,9 @@ type DecisionRecord struct {
 	Model         string `json:"model,omitempty"`
 	UpstreamModel string `json:"upstream_model,omitempty"`
 	Backend       string `json:"backend,omitempty"`
+	// Candidates are the backends routing looked at, in order, with the reason
+	// each one before the chosen one was set aside.
+	Candidates []Candidate `json:"candidates,omitempty"`
 
 	// Label is the classification of the request and LabelSources where it
 	// comes from: what the caller declared, the default, what inspection found.

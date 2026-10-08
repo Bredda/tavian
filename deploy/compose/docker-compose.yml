@@ -98,6 +98,7 @@ services:
     networks: [backplane, publish]
     depends_on:
       mockllm: { condition: service_started }
+      mockllm-external: { condition: service_started }
       migrate: { condition: service_completed_successfully }
     read_only: true
     cap_drop: [ALL]
@@ -109,7 +110,20 @@ services:
       context: ../..
       args: { CMD: mockllm }
     image: tavian-mockllm:dev
-    command: ["-addr", ":8000"]
+    command: ["-addr", ":8000", "-name", "on-prem"]
+    networks: [backplane]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # Stands for an approved external provider (see partner-eu in tavian.yaml).
+  # It sits on the private network too, so the demo never leaves your machine.
+  mockllm-external:
+    build:
+      context: ../..
+      args: { CMD: mockllm }
+    image: tavian-mockllm:dev
+    command: ["-addr", ":8000", "-name", "partner-eu"]
     networks: [backplane]
     read_only: true
     cap_drop: [ALL]
