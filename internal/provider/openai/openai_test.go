@@ -88,7 +88,7 @@ func TestChatCompletionsNonStreaming(t *testing.T) {
 
 	c := New(up.Client(), "tavian/test")
 	rec := httptest.NewRecorder()
-	res, err := c.ChatCompletions(context.Background(), rec, backend(t, up.URL+"/v1", "backend-secret"), []byte(`{"model":"m"}`), "")
+	res, err := c.ChatCompletions(context.Background(), rec, backend(t, up.URL+"/v1", "backend-secret"), []byte(`{"model":"m"}`), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestChatCompletionsNeverForwardsClientCredentials(t *testing.T) {
 	defer up.Close()
 	c := New(up.Client(), "ua")
 	// No backend credential configured: nothing at all may be sent.
-	if _, err := c.ChatCompletions(context.Background(), httptest.NewRecorder(), backend(t, up.URL, ""), []byte(`{}`), ""); err != nil {
+	if _, err := c.ChatCompletions(context.Background(), httptest.NewRecorder(), backend(t, up.URL, ""), []byte(`{}`), "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if gotAuth != "" {
@@ -152,7 +152,7 @@ func TestChatCompletionsStreaming(t *testing.T) {
 
 	c := New(up.Client(), "ua")
 	rec := httptest.NewRecorder()
-	res, err := c.ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{"stream":true}`), "text/event-stream")
+	res, err := c.ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{"stream":true}`), "text/event-stream", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestChatCompletionsUpstreamErrorStatusIsRelayed(t *testing.T) {
 	}))
 	defer up.Close()
 	rec := httptest.NewRecorder()
-	res, err := New(up.Client(), "ua").ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{}`), "")
+	res, err := New(up.Client(), "ua").ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{}`), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestChatCompletionsUnreachableBackend(t *testing.T) {
 	u := up.URL
 	up.Close() // nothing listens any more
 	rec := httptest.NewRecorder()
-	res, err := New(http.DefaultClient, "ua").ChatCompletions(context.Background(), rec, backend(t, u, ""), []byte(`{}`), "")
+	res, err := New(http.DefaultClient, "ua").ChatCompletions(context.Background(), rec, backend(t, u, ""), []byte(`{}`), "", "")
 	if !errors.Is(err, ErrUpstream) {
 		t.Fatalf("err = %v, want ErrUpstream", err)
 	}
@@ -214,12 +214,121 @@ func TestChatCompletionsUnreachableBackend(t *testing.T) {
 
 func TestSSETapDropsOversizedLines(t *testing.T) {
 	tap := &sseTap{}
-	tap.write([]byte(strings.Repeat("x", maxSSELine+1)))
-	if len(tap.buf) != 0 {
-		t.Error("oversized partial line must be dropped")
+	out := tap.filter([]byte(strings.Repeat("x", maxSSELine+1)))
+	if len(tap.buf) != 0 || len(out) != maxSSELine+1 {
+		t.Error("an oversized partial line must be passed through, not held")
 	}
-	tap.write([]byte("data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n"))
+	tap.filter([]byte("data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n"))
 	if !tap.usage.Known {
 		t.Error("tap must keep working after dropping a line")
+	}
+}
+
+func TestResponseModelIsPutBackToTheClientsName(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"c1","model":"meta/llama-upstream","choices":[{"index":0}],"usage":{"prompt_tokens":4,"completion_tokens":2},"x_vendor":{"keep":true}}`)
+	}))
+	defer up.Close()
+
+	rec := httptest.NewRecorder()
+	res, err := New(up.Client(), "ua").ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{}`), "", "llama-70b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if string(out["model"]) != `"llama-70b"` {
+		t.Errorf("model = %s", out["model"])
+	}
+	for _, k := range []string{"id", "choices", "usage", "x_vendor"} {
+		if _, ok := out[k]; !ok {
+			t.Errorf("field %q was lost", k)
+		}
+	}
+	if res.Usage != (Usage{Input: 4, Output: 2, Known: true}) {
+		t.Errorf("usage = %+v", res.Usage)
+	}
+}
+
+func TestModelRewriteLeavesErrorsAndModellessBodiesAlone(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		"error status":  {http.StatusBadRequest, `{"error":{"message":"bad","model":"upstream"}}`},
+		"no model":      {http.StatusOK, `{"id":"c1","choices":[]}`},
+		"not an object": {http.StatusOK, `["model"]`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				io.WriteString(w, tc.body)
+			}))
+			defer up.Close()
+			rec := httptest.NewRecorder()
+			if _, err := New(up.Client(), "ua").ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{}`), "", "client-name"); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Body.String() != tc.body {
+				t.Errorf("body changed: %q", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestStreamedChunksCarryTheClientsModelName(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		io.WriteString(w, ": keep-alive comment\n\n")
+		io.WriteString(w, "data: {\"model\":\"up\",\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n")
+		fl.Flush()
+		// An event split mid-line, with CRLF endings.
+		io.WriteString(w, "data: {\"model\":\"up\",\"choices\":[],\"usa")
+		fl.Flush()
+		io.WriteString(w, "ge\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\r\n\r\n")
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{}}]}\n\n") // no model field
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer up.Close()
+
+	rec := httptest.NewRecorder()
+	res, err := New(up.Client(), "ua").ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{}`), "text/event-stream", "client-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"up"`) {
+		t.Errorf("the backend's model name leaked: %q", body)
+	}
+	if n := strings.Count(body, `"model":"client-name"`); n != 2 {
+		t.Errorf("model rewritten %d times, want 2: %q", n, body)
+	}
+	for _, want := range []string{": keep-alive comment\n\n", "data: {\"choices\":[{\"delta\":{}}]}\n\n", "data: [DONE]\n\n", "\r\n\r\n"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stream lost %q: %q", want, body)
+		}
+	}
+	if res.Usage != (Usage{Input: 5, Output: 2, Known: true}) {
+		t.Errorf("usage = %+v", res.Usage)
+	}
+}
+
+func TestStreamEndingWithoutNewlineIsFlushed(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: [DONE]") // no trailing newline
+	}))
+	defer up.Close()
+	rec := httptest.NewRecorder()
+	if _, err := New(up.Client(), "ua").ChatCompletions(context.Background(), rec, backend(t, up.URL, ""), []byte(`{}`), "text/event-stream", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Body.String() != "data: [DONE]" {
+		t.Errorf("body = %q", rec.Body.String())
 	}
 }

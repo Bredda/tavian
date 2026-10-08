@@ -18,7 +18,7 @@ compatibility shows up as a failing PR.
 | Area | Checks |
 | --- | --- |
 | Models | listing, per-key filtering |
-| Chat | plain and multipart content, `system` messages, unknown fields reaching the backend, model-name mapping, `X-Request-Id` |
+| Chat | plain and multipart content, `system` messages, unknown fields reaching the backend, model-name mapping in both directions (request and response, every stream chunk), `X-Request-Id` |
 | Streaming | the iterator API and the `stream()` helpers, with and without `include_usage` (Tavian forces usage upstream and relays the extra final chunk), early close |
 | Tool calls | non-streamed and streamed (SDK helper and by hand), `tool_choice: none`, a full tool round trip |
 | Errors | 401, 403, 404, 400, relayed backend 5xx, OpenAI-shaped bodies, unsupported endpoints, no model-existence leak |

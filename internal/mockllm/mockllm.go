@@ -117,6 +117,9 @@ func chat(w http.ResponseWriter, r *http.Request) {
 		return map[string]any{
 			"id": "chatcmpl-mock", "object": object, "created": created, "model": req.Model,
 			"system_fingerprint": fingerprint,
+			// Not part of the OpenAI schema: lets tests see which model name
+			// the backend was actually asked for.
+			"x_mock_received_model": req.Model,
 		}
 	}
 

@@ -152,16 +152,20 @@ func TestChatCompletionEndToEnd(t *testing.T) {
 		t.Error("missing X-Request-Id")
 	}
 	var out struct {
-		Model   string `json:"model"`
-		Choices []struct {
+		Model         string `json:"model"`
+		ReceivedModel string `json:"x_mock_received_model"`
+		Choices       []struct {
 			Message struct{ Content string } `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Model != "mock-upstream" {
-		t.Errorf("upstream saw model %q, want the rewritten upstream name", out.Model)
+	if out.ReceivedModel != "mock-upstream" {
+		t.Errorf("backend was asked for model %q, want the rewritten upstream name", out.ReceivedModel)
+	}
+	if out.Model != "llama-70b" {
+		t.Errorf("response model = %q, want the name the client asked for", out.Model)
 	}
 	if len(out.Choices) != 1 || !strings.Contains(out.Choices[0].Message.Content, "hello there world") {
 		t.Errorf("choices = %+v", out.Choices)
@@ -196,6 +200,9 @@ func TestChatCompletionStreaming(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "data: [DONE]") {
 		t.Errorf("stream incomplete: %q", body)
+	}
+	if strings.Contains(string(body), `"model":"mock-upstream"`) || !strings.Contains(string(body), `"model":"llama-70b"`) {
+		t.Errorf("stream chunks must carry the client's model name: %q", body)
 	}
 	evs := f.sink.Events()
 	if len(evs) != 1 {
