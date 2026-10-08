@@ -20,7 +20,7 @@ _Status: living document. Items marked **[blocking]** should be settled before M
 
 ## Security
 
-11. **Multimodal and files.** Block by default? Pass-through with explicit policy? OCR/image inspection is out of scope early; confirm the declared-gap approach.
+11. **Multimodal and files.** *Provisional answer, 2026-10-08:* requests with non-text content parts are **refused** (`multimodal_not_inspectable`), with no setting to relax it. An explicit `pass_through`, flagged in the decision record, would arrive with the policy engine; confirm that before building it. OCR/image inspection stays out of scope early.
 12. **Reversible pseudonymization.** Valuable for utility (redact, call model, restore) but the mapping store becomes a sensitive asset. Worth the complexity, and when?
 13. **Admin separation of duties.** How strict for the first release: simple roles, or full two-person approval and external audit anchoring from the start?
 14. **Erasure vs tamper-evidence.** Crypto-shredding design needs a legal sanity check (GDPR erasure, retention obligations) with real use cases.

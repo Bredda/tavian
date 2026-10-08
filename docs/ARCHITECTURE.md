@@ -72,7 +72,7 @@ Usage events and audit records are written to an **outbox table in PostgreSQL** 
                     (today: in-flight cap `limits.max_inflight`; M2: RPM, concurrency per scope)
  4  authorize        RBAC: may this principal call this API and this model alias?
  5  normalize        parse into an internal request representation (messages, tools, params)
- 6  inspect (req)    detectors → findings + classification label
+ 6  inspect (req)    detectors → findings (built; classification label: M2)
  7  policy (phase A) inputs: identity, model, label, findings → constraints:
                        allowed destination classes, required transforms (redact), or deny
  8  transform        apply redactions if required
@@ -111,7 +111,7 @@ Usage is extracted from the final chunk when the provider supplies it, otherwise
 |---|---|
 | IdP / JWKS unreachable | Keep validating with cached keys up to a configurable max staleness; unknown `kid` → reject |
 | PostgreSQL unavailable | Data plane keeps serving from its snapshot; events spool to a bounded local disk queue; spool full → **reject** (audit cannot be guaranteed) |
-| Inspection error or timeout | **Block**, unless a specific non-critical detector is explicitly configured `on_error: allow` |
+| Inspection error or timeout | **Block** (`inspection_failed`). A per-detector `on_error: allow` is planned with the policy engine; today there is no such exception |
 | New config snapshot invalid | Keep last known good snapshot, raise an alert |
 | Quota store unavailable | Default **fail closed**; optional degraded mode with conservative local limits |
 | Backend fails before first byte | Fail over within the allowed candidate set |
@@ -172,7 +172,7 @@ internal/server/           ✓ data-plane and admin HTTP handlers, middleware, P
 internal/docs/             ✓ embedded OpenAPI description + Scalar viewer served at /docs (offline, strict CSP)
 internal/mockllm/          ✓ mock backend implementation
 internal/glob, ids, version  ✓ small utilities
-internal/inspect/          · detectors, classification, findings (M2)
+internal/inspect/          ✓ detectors, findings, fail-closed engine (classification: M2)
 internal/policy/           · YAML + CEL evaluation, decision records (M2)
 internal/quota/            · admission, reserve/settle, counters (M2)
 internal/audit/            · decision records, hash chain, encryption (M2/M4)
