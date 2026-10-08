@@ -17,10 +17,12 @@ import (
 // UsageEvent describes one served request. It never carries prompt or response
 // content.
 type UsageEvent struct {
-	EventID   string    `json:"event_id"`
-	RequestID string    `json:"request_id"`
-	Time      time.Time `json:"time"`
-	Revision  string    `json:"config_revision"`
+	EventID   string `json:"event_id"`
+	RequestID string `json:"request_id"`
+	// DecisionID is the decision record of the same request.
+	DecisionID string    `json:"decision_id,omitempty"`
+	Time       time.Time `json:"time"`
+	Revision   string    `json:"config_revision"`
 
 	// Who: an API key, or a person/service account known to the identity
 	// provider (subject), never both.
@@ -54,41 +56,67 @@ type UsageEvent struct {
 
 	Streamed  bool   `json:"streamed"`
 	Status    int    `json:"status"`
-	Outcome   string `json:"outcome"` // ok | upstream_error | stream_error | client_gone | inspection_blocked
+	Outcome   string `json:"outcome"` // ok | upstream_error | stream_error | client_gone
 	LatencyMS int64  `json:"latency_ms"`
 	TTFBMS    int64  `json:"ttfb_ms"`
 }
 
-// Sink receives usage events. The PostgreSQL outbox implementation arrives in
-// M1's storage work; a failing sink must be treated as an audit failure.
+// Event is something the gateway records: a usage event, a decision record.
+// It carries its own identity so sinks can store it without knowing its type.
+type Event interface {
+	// Kind names the type of event (the outbox kind).
+	Kind() string
+	// ID is unique per event; storing the same ID twice is harmless.
+	ID() string
+	// At is when the event happened.
+	At() time.Time
+}
+
+// Kind, ID and At make a UsageEvent an Event.
+func (UsageEvent) Kind() string    { return KindUsage }
+func (e UsageEvent) ID() string    { return e.EventID }
+func (e UsageEvent) At() time.Time { return e.Time }
+
+// Sink receives events. A failing sink must be treated as an audit failure.
 type Sink interface {
-	Emit(ctx context.Context, e UsageEvent) error
+	Emit(ctx context.Context, e Event) error
 }
 
 // LogSink writes events as structured log records.
 type LogSink struct{ Log *slog.Logger }
 
-func (s LogSink) Emit(ctx context.Context, e UsageEvent) error {
-	s.Log.LogAttrs(ctx, slog.LevelInfo, "usage", slog.Any("event", e))
+func (s LogSink) Emit(ctx context.Context, e Event) error {
+	s.Log.LogAttrs(ctx, slog.LevelInfo, e.Kind(), slog.Any("event", e))
 	return nil
 }
 
 // MemorySink keeps events in memory. Intended for tests.
 type MemorySink struct {
 	mu     sync.Mutex
-	events []UsageEvent
+	events []Event
 }
 
-func (s *MemorySink) Emit(_ context.Context, e UsageEvent) error {
+func (s *MemorySink) Emit(_ context.Context, e Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, e)
 	return nil
 }
 
-// Events returns a copy of the recorded events.
-func (s *MemorySink) Events() []UsageEvent {
+// Records returns a copy of everything recorded, of every kind.
+func (s *MemorySink) Records() []Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]UsageEvent(nil), s.events...)
+	return append([]Event(nil), s.events...)
+}
+
+// Events returns a copy of the recorded usage events.
+func (s *MemorySink) Events() []UsageEvent {
+	var out []UsageEvent
+	for _, e := range s.Records() {
+		if u, ok := e.(UsageEvent); ok {
+			out = append(out, u)
+		}
+	}
+	return out
 }

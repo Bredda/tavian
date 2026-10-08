@@ -80,7 +80,7 @@ func (m *Metrics) Handler() http.Handler {
 
 // WatchStorage exposes the state of the usage-event pipeline: whether the
 // database is believed reachable and how many bytes wait in the spool.
-func (m *Metrics) WatchStorage(up func() bool, spoolBytes func() int64) {
+func (m *Metrics) WatchStorage(up func() bool, spoolBytes func() int64, rejected func() int64) {
 	m.reg.MustRegister(
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "tavian_database_up",
@@ -93,8 +93,12 @@ func (m *Metrics) WatchStorage(up func() bool, spoolBytes func() int64) {
 		}),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "tavian_spool_bytes",
-			Help: "Bytes of usage events waiting on disk for PostgreSQL.",
+			Help: "Bytes of events waiting on disk for PostgreSQL.",
 		}, func() float64 { return float64(spoolBytes()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{
+			Name: "tavian_spool_rejected_records_total",
+			Help: "Spooled records that could not be read back and were set aside in events.rejected. Any increase needs a look.",
+		}, func() float64 { return float64(rejected()) }),
 	)
 }
 

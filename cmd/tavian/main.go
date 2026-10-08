@@ -207,7 +207,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		}
 		defer st.Close()
 		sink, audit = outbox, outbox
-		metrics.WatchStorage(outbox.Up, outbox.Spool.Size)
+		metrics.WatchStorage(outbox.Up, outbox.Spool.Size, outbox.Rejected)
 		// The replay loop outlives the signal context: in-flight requests
 		// still emit events while the servers drain.
 		var flushCtx context.Context

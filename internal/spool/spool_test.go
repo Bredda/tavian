@@ -131,3 +131,36 @@ func TestFilesAreNotWorldReadable(t *testing.T) {
 	}
 	_ = s.Close()
 }
+
+func TestRecordsTooLargeToReplayAreRefusedAtAppend(t *testing.T) {
+	s, err := Open(t.TempDir(), 64<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(make([]byte, maxRecord)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge: a line Drain cannot read would block everything behind it", err)
+	}
+	if s.Size() != 0 {
+		t.Errorf("size = %d after a refused append", s.Size())
+	}
+	if err := s.Append([]byte(`{"ok":true}`)); err != nil {
+		t.Errorf("a normal record after the refused one: %v", err)
+	}
+}
+
+func TestRejectKeepsARecordOutsideTheQueue(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir, 1<<20)
+	defer s.Close()
+	if err := s.Reject([]byte("bad one")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "events.rejected"))
+	if err != nil || string(got) != "bad one\n" {
+		t.Errorf("rejected file = %q, %v", got, err)
+	}
+	if s.Size() != 0 {
+		t.Errorf("a rejected record must not count as queued: size = %d", s.Size())
+	}
+}

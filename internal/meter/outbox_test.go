@@ -2,8 +2,12 @@ package meter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,7 +114,7 @@ func TestEventsDuringReplayAreNotLost(t *testing.T) {
 }
 
 func TestFullSpoolFailsClosed(t *testing.T) {
-	s, fs := newSink(t, 1500)
+	s, fs := newSink(t, 4000) // many times the size of one spooled event
 	fs.setDown(true)
 	if err := s.Admit(); err != nil {
 		t.Fatalf("admit with an empty spool: %v", err)
@@ -173,5 +177,82 @@ func TestRunReplaysInBackground(t *testing.T) {
 	<-done
 	if fs.count() != 1 {
 		t.Errorf("rows = %d, want 1", fs.count())
+	}
+}
+
+// decisionLike is an event of another kind, as a decision record is.
+type decisionLike struct {
+	DecisionID string    `json:"decision_id"`
+	At_        time.Time `json:"time"`
+	Note       string    `json:"note"`
+}
+
+func (decisionLike) Kind() string    { return "decision" }
+func (d decisionLike) ID() string    { return d.DecisionID }
+func (d decisionLike) At() time.Time { return d.At_ }
+
+func TestSpooledEventsKeepTheirKind(t *testing.T) {
+	s, fs := newSink(t, 1<<20)
+	fs.setDown(true)
+	now := time.Now().UTC()
+	_ = s.Emit(context.Background(), event("u1"))
+	_ = s.Emit(context.Background(), decisionLike{DecisionID: "d1", At_: now, Note: "refused"})
+	fs.setDown(false)
+	s.flush(context.Background())
+
+	if fs.count() != 2 {
+		t.Fatalf("rows = %d, want both kinds replayed", fs.count())
+	}
+	if got := fs.rows["u1"].Kind; got != KindUsage {
+		t.Errorf("usage event stored as %q", got)
+	}
+	d := fs.rows["d1"]
+	if d.Kind != "decision" || !d.OccurredAt.Equal(now) {
+		t.Errorf("decision stored as %+v, want kind decision at %v", d, now)
+	}
+	if string(d.Payload) == "" || d.Payload[0] != '{' || !strings.Contains(string(d.Payload), `"note":"refused"`) || strings.Contains(string(d.Payload), `"kind"`) {
+		t.Errorf("payload = %s, want the bare event, not the envelope", d.Payload)
+	}
+}
+
+func TestSpoolFromBeforeEnvelopesIsStillReplayed(t *testing.T) {
+	dir := t.TempDir()
+	sp, err := spool.Open(dir, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, _ := json.Marshal(event("old1")) // a bare usage event, as earlier versions spooled it
+	if err := sp.Append(legacy); err != nil {
+		t.Fatal(err)
+	}
+	fs := newFakeStore()
+	s := &OutboxSink{Store: fs, Spool: sp, Log: slog.New(slog.DiscardHandler)}
+	s.flush(context.Background())
+	if r, ok := fs.rows["old1"]; !ok || r.Kind != KindUsage {
+		t.Errorf("legacy record not replayed as a usage event: %+v", fs.rows)
+	}
+}
+
+func TestUnreadableSpooledRecordsAreSetAsideNotDropped(t *testing.T) {
+	dir := t.TempDir()
+	sp, _ := spool.Open(dir, 1<<20)
+	good, _ := json.Marshal(event("ok1"))
+	for _, rec := range []string{`{"kind":"decision","id":"","payload":{}}`, `torn wri`, `{"kind":"x","id":"i"}`} {
+		_ = sp.Append([]byte(rec))
+	}
+	_ = sp.Append(good)
+	fs := newFakeStore()
+	s := &OutboxSink{Store: fs, Spool: sp, Log: slog.New(slog.DiscardHandler)}
+	s.flush(context.Background())
+
+	if fs.count() != 1 || s.Rejected() != 3 {
+		t.Fatalf("rows = %d rejected = %d, want the good record stored and 3 set aside", fs.count(), s.Rejected())
+	}
+	kept, err := os.ReadFile(filepath.Join(dir, "events.rejected"))
+	if err != nil || strings.Count(string(kept), "\n") != 3 || !strings.Contains(string(kept), "torn wri") {
+		t.Errorf("events.rejected = %q err = %v", kept, err)
+	}
+	if sp.Size() != 0 {
+		t.Errorf("spool size = %d, rejected records must not stay queued", sp.Size())
 	}
 }

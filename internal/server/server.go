@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bredda/tavian/internal/audit"
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/docs"
@@ -119,6 +120,59 @@ func (s *server) models(w http.ResponseWriter, r *http.Request) string {
 	return "ok"
 }
 
+// decisionHeader carries the id of the decision record of a request. It is the
+// same id as the "decision_id" of error bodies and of the record in the outbox.
+const decisionHeader = "X-Tavian-Decision-Id"
+
+// call is what the chat handler knows about the request it is deciding.
+type call struct {
+	snap       *config.Snapshot
+	id         *auth.Identity
+	decisionID string
+	at         time.Time
+	model      string
+	inspection *inspect.Result
+}
+
+// record starts the decision record of c.
+func (c *call) record(ctx context.Context, outcome string, reason audit.Reason, status int) audit.DecisionRecord {
+	rec := audit.DecisionRecord{
+		DecisionID:  c.decisionID,
+		RequestID:   RequestID(ctx),
+		Time:        c.at.UTC(),
+		Revision:    c.snap.Revision,
+		AuthMethod:  c.id.Method,
+		KeyID:       c.id.KeyID,
+		UserID:      c.id.Subject,
+		Team:        c.id.Team,
+		Application: c.id.Application,
+		Model:       c.model,
+		Outcome:     outcome,
+		ReasonCode:  reason.Code,
+		Status:      status,
+	}
+	if c.inspection != nil {
+		rec.WithInspection(*c.inspection)
+	}
+	return rec
+}
+
+// refuse records the decision to refuse the request, then answers. The record
+// is stored before the answer is sent, so the decision_id the caller receives
+// always exists; if it cannot be stored the request fails closed (ADR-0005).
+// It returns the outcome label for metrics.
+func (s *server) refuse(ctx context.Context, w http.ResponseWriter, c *call, reason audit.Reason, msg, label string) string {
+	if err := s.emit(ctx, c.record(ctx, audit.OutcomeRefused, reason, reason.Status)); err != nil {
+		s.Log.ErrorContext(ctx, "refusal could not be recorded", "reason", reason.Code, "error", err)
+		w.Header().Del(decisionHeader)
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, "server_error", "audit_unavailable", "the gateway cannot record this request right now")
+		return "audit_unavailable"
+	}
+	writeErrorWithDecision(w, reason.Status, reason.Type, reason.Client, msg, c.decisionID)
+	return label
+}
+
 // chat handles POST /v1/chat/completions.
 func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	ctx := r.Context()
@@ -128,7 +182,8 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return "not_ready"
 	}
 
-	// authenticate
+	// authenticate. Until the caller is known nothing is recorded in the audit
+	// trail: anyone could otherwise fill it.
 	id, err := s.Auth.Authenticate(r)
 	if err != nil {
 		s.Log.InfoContext(r.Context(), "authentication failed", "reason", auth.Reason(err))
@@ -136,8 +191,8 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return "unauthenticated"
 	}
 
-	// Fail closed (ADR-0005): do not serve a request whose usage event could
-	// not be recorded.
+	// Fail closed (ADR-0005): do not serve a request whose records could not
+	// be stored.
 	if a, ok := s.Sink.(meter.Admitter); ok {
 		if err := a.Admit(); err != nil {
 			s.Log.ErrorContext(ctx, "refusing request", "error", err)
@@ -147,55 +202,51 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		}
 	}
 
+	c := &call{snap: snap, id: id, decisionID: ids.New(), at: time.Now()}
+	w.Header().Set(decisionHeader, c.decisionID)
+
 	// receive (bounded)
 	r.Body = http.MaxBytesReader(w, r.Body, snap.Limits.MaxRequestBytes)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large", "request body too large")
-			return "request_too_large"
+			return s.refuse(ctx, w, c, audit.RequestTooLarge, "request body too large", "request_too_large")
 		}
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "could not read request body")
-		return "invalid_request"
+		return s.refuse(ctx, w, c, audit.InvalidRequest, "could not read request body", "invalid_request")
 	}
 
 	// normalize
 	model, _, err := openai.PeekChat(raw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
-		return "invalid_request"
+		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
+	c.model = model
 
 	// authorize
 	if !id.CanUseModel(model) {
-		writeError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed", "you may not use the requested model")
-		return "denied_model"
+		return s.refuse(ctx, w, c, audit.ModelNotAllowed, "you may not use the requested model", "denied_model")
 	}
 
 	// inspect (fail closed: a request that cannot be inspected is not served)
 	creq, err := openai.ExtractChat(raw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
-		return "invalid_request"
+		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
 	inspection, ierr := snap.Inspector.Inspect(ctx, creq)
+	c.inspection = &inspection
 	s.Metrics.observeInspection(inspection)
-	summary := inspection.Summary()
 	if ierr != nil {
-		code := inspect.CodeOf(ierr)
-		status := http.StatusBadRequest
-		typ, msg := "invalid_request_error", "the request contains content that cannot be inspected"
-		switch code {
-		case inspect.CodeFailed:
-			status, typ, msg = http.StatusServiceUnavailable, "server_error", "the request could not be inspected"
+		reason := audit.FromInspection(inspect.CodeOf(ierr))
+		msg := "the request contains content that cannot be inspected"
+		switch reason {
+		case audit.InspectionFailed:
+			msg = "the request could not be inspected"
 			s.Log.ErrorContext(ctx, "inspection failed", "error", ierr)
-		case inspect.GapTooComplex:
+		case audit.RequestTooComplex:
 			msg = "the request is too complex to be inspected"
 		}
-		s.emit(ctx, s.event(ctx, snap, id, model, time.Now(), "inspection_blocked", status, &summary))
-		writeError(w, status, typ, code, msg)
-		return "inspection_blocked"
+		return s.refuse(ctx, w, c, reason, msg, "inspection_blocked")
 	}
 
 	// TODO(M2): policy phase A -> constraints (allowed destinations, redactions).
@@ -203,13 +254,11 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	// route
 	route, err := router.Resolve(snap, model)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", "the requested model does not exist")
-		return "model_not_found"
+		return s.refuse(ctx, w, c, audit.ModelNotFound, "the requested model does not exist", "model_not_found")
 	}
 	upstreamBody, err := openai.RewriteChat(raw, route.UpstreamModel)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
-		return "invalid_request"
+		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
 
 	// TODO(M2): policy phase B (assert the chosen backend satisfies constraints).
@@ -219,24 +268,31 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	start := time.Now()
 	res, err := s.Provider.ChatCompletions(ctx, w, route.Backend, upstreamBody, r.Header.Get("Accept"), model)
 
-	outcome := "ok"
+	outcome, reason, status := "ok", audit.Served, res.Status
 	switch {
 	case err != nil && !res.Started:
 		s.Log.WarnContext(ctx, "backend call failed", "backend", route.Backend, "error", err)
-		writeError(w, http.StatusBadGateway, "server_error", "upstream_unavailable", "the model backend could not be reached")
-		outcome = "upstream_error"
+		writeErrorWithDecision(w, http.StatusBadGateway, "server_error", "upstream_unavailable", "the model backend could not be reached", c.decisionID)
+		outcome, reason, status = "upstream_error", audit.UpstreamUnavailable, http.StatusBadGateway
 		res.Status = http.StatusBadGateway
 	case err != nil && ctx.Err() != nil:
-		outcome = "client_gone"
+		outcome, reason = "client_gone", audit.ClientDisconnected
 	case err != nil:
 		s.Log.WarnContext(ctx, "relay interrupted", "backend", route.Backend, "error", err)
-		outcome = "stream_error"
+		outcome, reason = "stream_error", audit.StreamInterrupted
 	case res.Status/100 != 2:
-		outcome = "upstream_error"
+		outcome, reason = "upstream_error", audit.UpstreamError
 	}
 
 	// TODO(M2): quota settle with actual usage.
-	ev := s.event(ctx, snap, id, model, start, outcome, res.Status, &summary)
+	rec := c.record(ctx, audit.OutcomeServed, reason, status)
+	if outcome != "ok" {
+		rec.Outcome = audit.OutcomeFailed
+	}
+	rec.UpstreamModel, rec.Backend = route.UpstreamModel, route.Backend.ID
+	s.emitOwed(ctx, rec)
+
+	ev := s.event(ctx, c, start, outcome, res.Status)
 	ev.UpstreamModel = route.UpstreamModel
 	ev.Backend = route.Backend.ID
 	ev.InputTokens = res.Usage.Input
@@ -247,7 +303,8 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	ev.Streamed = res.Streamed
 	ev.LatencyMS = time.Since(start).Milliseconds()
 	ev.TTFBMS = res.TTFB.Milliseconds()
-	s.emit(ctx, ev)
+	s.emitOwed(ctx, ev)
+
 	if res.Usage.Known {
 		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "input").Add(float64(res.Usage.Input))
 		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "output").Add(float64(res.Usage.Output))
@@ -255,34 +312,43 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	return outcome
 }
 
-// event starts the usage event of a request with what is known before a
-// backend is involved.
-func (s *server) event(ctx context.Context, snap *config.Snapshot, id *auth.Identity, model string, at time.Time, outcome string, status int, ins *inspect.Summary) meter.UsageEvent {
-	return meter.UsageEvent{
+// event starts the usage event of a request.
+func (s *server) event(ctx context.Context, c *call, at time.Time, outcome string, status int) meter.UsageEvent {
+	ev := meter.UsageEvent{
 		EventID:     ids.New(),
 		RequestID:   RequestID(ctx),
+		DecisionID:  c.decisionID,
 		Time:        at.UTC(),
-		Revision:    snap.Revision,
-		AuthMethod:  id.Method,
-		KeyID:       id.KeyID,
-		UserID:      id.Subject,
-		Team:        id.Team,
-		Application: id.Application,
-		Model:       model,
-		Inspection:  ins,
+		Revision:    c.snap.Revision,
+		AuthMethod:  c.id.Method,
+		KeyID:       c.id.KeyID,
+		UserID:      c.id.Subject,
+		Team:        c.id.Team,
+		Application: c.id.Application,
+		Model:       c.model,
 		Status:      status,
 		Outcome:     outcome,
 	}
+	if c.inspection != nil {
+		sum := c.inspection.Summary()
+		ev.Inspection = &sum
+	}
+	return ev
 }
 
-// emit records ev. It is detached from the request context: the client may be
-// gone, the event is still owed.
-func (s *server) emit(ctx context.Context, ev meter.UsageEvent) {
-	if err := s.Sink.Emit(context.WithoutCancel(ctx), ev); err != nil {
-		// Admit makes this rare; when it still happens the request is already
-		// served, so all that is left is to say loudly that an event is lost.
+// emit stores e, detached from the request context: the client may be gone,
+// the event is still owed.
+func (s *server) emit(ctx context.Context, e meter.Event) error {
+	return s.Sink.Emit(context.WithoutCancel(ctx), e)
+}
+
+// emitOwed stores an event of a request that was already served, so all that
+// is left on failure is to say loudly that an event is lost. Admit makes that
+// rare.
+func (s *server) emitOwed(ctx context.Context, e meter.Event) {
+	if err := s.emit(ctx, e); err != nil {
 		s.Metrics.eventsLost.Inc()
-		s.Log.ErrorContext(ctx, "usage event lost", "request_id", ev.RequestID, "error", err)
+		s.Log.ErrorContext(ctx, "event lost", "kind", e.Kind(), "id", e.ID(), "request_id", RequestID(ctx), "error", err)
 	}
 }
 
@@ -398,9 +464,17 @@ func unauthorized(w http.ResponseWriter) {
 // writeError sends an OpenAI-shaped error body. Messages never echo request
 // content.
 func writeError(w http.ResponseWriter, status int, typ, code, msg string) {
-	writeJSON(w, status, map[string]any{
-		"error": map[string]any{"message": msg, "type": typ, "code": code, "param": nil},
-	})
+	writeErrorWithDecision(w, status, typ, code, msg, "")
+}
+
+// writeErrorWithDecision adds the decision_id of the record explaining the
+// answer, when there is one.
+func writeErrorWithDecision(w http.ResponseWriter, status int, typ, code, msg, decisionID string) {
+	body := map[string]any{"message": msg, "type": typ, "code": code, "param": nil}
+	if decisionID != "" {
+		body["decision_id"] = decisionID
+	}
+	writeJSON(w, status, map[string]any{"error": body})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

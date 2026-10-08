@@ -16,6 +16,16 @@ import (
 // KindUsage is the outbox kind of a UsageEvent.
 const KindUsage = "usage"
 
+// envelope is one line of the spool: the event and what is needed to store it
+// again without knowing its type. Lines written before envelopes existed hold a
+// bare usage event; they have no "kind" and are read as such.
+type envelope struct {
+	Kind    string          `json:"kind"`
+	ID      string          `json:"id"`
+	At      time.Time       `json:"at"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 // ErrAuditUnavailable means an event could be neither stored nor spooled. The
 // gateway fails closed on it (ADR-0005).
 var ErrAuditUnavailable = errors.New("audit trail unavailable")
@@ -44,8 +54,12 @@ type OutboxSink struct {
 	// FlushEvery is how often the replay loop looks at the spool.
 	FlushEvery time.Duration
 
-	down atomic.Bool
+	down     atomic.Bool
+	rejected atomic.Int64
 }
+
+// Rejected counts spooled records that could not be read and were set aside.
+func (s *OutboxSink) Rejected() int64 { return s.rejected.Load() }
 
 // DefaultFlushEvery and DefaultEmitTimeout apply when the fields are zero.
 const (
@@ -55,10 +69,10 @@ const (
 )
 
 // Emit stores the event, falling back to the spool.
-func (s *OutboxSink) Emit(ctx context.Context, e UsageEvent) error {
+func (s *OutboxSink) Emit(ctx context.Context, e Event) error {
 	payload, err := json.Marshal(e)
 	if err != nil {
-		return fmt.Errorf("encode usage event: %w", err)
+		return fmt.Errorf("encode %s event: %w", e.Kind(), err)
 	}
 	// While the database is down, or events are waiting to be replayed, go
 	// straight to the spool: no timeout per request, and replay order is kept.
@@ -70,10 +84,14 @@ func (s *OutboxSink) Emit(ctx context.Context, e UsageEvent) error {
 			return nil
 		}
 		if !s.down.Swap(true) {
-			s.Log.Error("database unavailable, spooling usage events to disk", "error", err)
+			s.Log.Error("database unavailable, spooling events to disk", "error", err)
 		}
 	}
-	if err := s.Spool.Append(payload); err != nil {
+	line, err := json.Marshal(envelope{Kind: e.Kind(), ID: e.ID(), At: e.At(), Payload: payload})
+	if err != nil {
+		return fmt.Errorf("encode %s event: %w", e.Kind(), err)
+	}
+	if err := s.Spool.Append(line); err != nil {
 		return fmt.Errorf("%w: %w", ErrAuditUnavailable, err)
 	}
 	return nil
@@ -120,14 +138,22 @@ func (s *OutboxSink) flush(ctx context.Context) {
 	err := s.Spool.Drain(ctx, replayBatch, func(batch [][]byte) error {
 		rows := make([]store.OutboxRow, 0, len(batch))
 		for _, rec := range batch {
-			var e UsageEvent
-			if err := json.Unmarshal(rec, &e); err != nil || e.EventID == "" {
-				// A torn write after a crash. Nothing to recover, and one bad
+			row, ok := rowOfSpooled(rec)
+			if !ok {
+				// A torn write after a crash, or a record from a future
+				// version. It is set aside rather than dropped, and one bad
 				// line must not block the rest of the queue.
-				s.Log.Error("dropping unreadable spooled record", "bytes", len(rec))
+				s.rejected.Add(1)
+				s.Log.Error("setting aside unreadable spooled record", "bytes", len(rec))
+				if err := s.Spool.Reject(rec); err != nil {
+					return fmt.Errorf("keep rejected record: %w", err)
+				}
 				continue
 			}
-			rows = append(rows, rowOf(e, rec))
+			rows = append(rows, row)
+		}
+		if len(rows) == 0 {
+			return nil
 		}
 		wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
@@ -136,15 +162,34 @@ func (s *OutboxSink) flush(ctx context.Context) {
 	switch {
 	case err != nil:
 		if ctx.Err() == nil && s.down.CompareAndSwap(false, true) {
-			s.Log.Error("replaying spooled usage events failed", "error", err)
+			s.Log.Error("replaying spooled events failed", "error", err)
 		}
 	case s.Spool.Size() == 0 && s.down.CompareAndSwap(true, false):
 		s.Log.Info("database available again, spool drained")
 	}
 }
 
-func rowOf(e UsageEvent, payload []byte) store.OutboxRow {
-	return store.OutboxRow{EventID: e.EventID, Kind: KindUsage, OccurredAt: e.Time, Payload: payload}
+func rowOf(e Event, payload []byte) store.OutboxRow {
+	return store.OutboxRow{EventID: e.ID(), Kind: e.Kind(), OccurredAt: e.At(), Payload: payload}
+}
+
+// rowOfSpooled reads one spool line, in either format.
+func rowOfSpooled(rec []byte) (store.OutboxRow, bool) {
+	var env envelope
+	if err := json.Unmarshal(rec, &env); err != nil {
+		return store.OutboxRow{}, false
+	}
+	if env.Kind == "" { // legacy: a bare usage event
+		var e UsageEvent
+		if err := json.Unmarshal(rec, &e); err != nil || e.EventID == "" {
+			return store.OutboxRow{}, false
+		}
+		return rowOf(e, rec), true
+	}
+	if env.ID == "" || len(env.Payload) == 0 {
+		return store.OutboxRow{}, false
+	}
+	return store.OutboxRow{EventID: env.ID, Kind: env.Kind, OccurredAt: env.At, Payload: env.Payload}, true
 }
 
 func (s *OutboxSink) timeout() time.Duration {
