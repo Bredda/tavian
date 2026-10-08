@@ -1,0 +1,96 @@
+# Fixtures for the example policies. Each case says who sends what and what the
+# gateway must decide; `tavian policy test` runs them through the gateway's own
+# decision code. Use `content` to inspect real text with the configured
+# detectors, or `findings` to state findings directly.
+apiVersion: tavian/v1alpha1
+kind: PolicyTest
+metadata: { name: example policies }
+cases:
+  - name: an ordinary prompt from research goes to the first backend of the route
+    caller: { team: research, application: notebook }
+    request: { model: shared }
+    content: ["summarise the quarterly report"]
+    expect: { outcome: served, label: internal, backend: partner, destinations: [internal, approved-external] }
+
+  - name: e-mail addresses are redacted for everyone
+    caller: { team: research }
+    request: { model: shared }
+    content: ["write to alice@example.org"]
+    expect:
+      outcome: served
+      redact: [pii.email]
+      rules: [org-guardrails/mask-emails]
+
+  - name: a secret is blocked with the policy's own reason, whatever the clearance
+    caller: { team: research, clearance: restricted }
+    request: { model: shared }
+    content: ["the key is AKIAIOSFODNN7EXAMPLE"]
+    expect: { outcome: refused, reason: SECRET_IN_PROMPT, rules: [org-guardrails/no-secrets-in-prompts] }
+
+  - name: an IBAN above the default clearance is refused
+    caller: { team: research }
+    request: { model: shared }
+    content: ["pay FR14 2004 1010 0505 0001 3M02 606"]
+    expect: { outcome: refused, reason: CLEARANCE_EXCEEDED, label: confidential }
+
+  - name: an IBAN from a cleared caller is served on premises, though the route prefers the partner
+    caller: { team: research, clearance: confidential }
+    request: { model: shared }
+    content: ["pay FR14 2004 1010 0505 0001 3M02 606"]
+    expect: { outcome: served, label: confidential, backend: local, destinations: [internal] }
+
+  - name: an external-only model is refused for confidential data
+    caller: { team: research, clearance: confidential }
+    request: { model: partner-only }
+    content: ["pay FR14 2004 1010 0505 0001 3M02 606"]
+    expect: { outcome: refused, reason: NO_ELIGIBLE_BACKEND }
+
+  - name: a project code name raises the label through the organization policy
+    caller: { team: research, clearance: confidential }
+    request: { model: shared }
+    content: ["the budget of Projet Aurore"]
+    expect: { outcome: served, label: confidential, backend: local, rules: [org-guardrails/codenames-are-confidential] }
+
+  - name: everything finance sends is confidential, and internal data stays home
+    caller: { team: finance, clearance: confidential }
+    request: { model: llama-70b }
+    content: ["good morning"]
+    expect: { outcome: served, label: confidential, backend: local, destinations: [internal] }
+
+  - name: finance's model list leaves out the model shared with the partner
+    caller: { team: finance, clearance: confidential }
+    request: { model: shared }
+    content: ["good morning"]
+    expect: { outcome: refused, reason: MODEL_NOT_ALLOWED }
+
+  - name: finance cannot use a model outside its list
+    caller: { team: finance, clearance: confidential }
+    request: { model: gpt-4 }
+    content: ["good morning"]
+    expect: { outcome: refused, reason: MODEL_NOT_ALLOWED }
+
+  - name: a telephone number is flagged for finance only
+    caller: { team: finance, clearance: confidential }
+    request: { model: llama-70b }
+    content: ["call +33 6 12 34 56 78"]
+    expect: { outcome: served, flagged: [finance/watch-phones] }
+
+  - name: a long list of addresses looks like a customer list and is restricted
+    caller: { team: finance, clearance: restricted }
+    request: { model: llama-70b }
+    findings:
+      - { type: pii, subtype: email, count: 25 }
+    expect: { outcome: served, label: restricted, redact: [pii.email], rules: [finance/customer-list] }
+
+  - name: the same list from a caller cleared only for confidential is refused
+    caller: { team: finance, clearance: confidential }
+    request: { model: llama-70b }
+    findings:
+      - { type: pii, subtype: email, count: 25 }
+    expect: { outcome: refused, reason: CLEARANCE_EXCEEDED, label: restricted }
+
+  - name: a declared label can raise the label
+    caller: { team: research, clearance: confidential }
+    request: { model: shared, declared_label: confidential }
+    content: ["nothing special"]
+    expect: { outcome: served, label: confidential, backend: local }
