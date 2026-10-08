@@ -30,6 +30,8 @@ type fixture struct {
 	sink   *meter.MemorySink
 	key    string
 	narrow string // key limited to "other-*" models
+	conf   string // key cleared up to "confidential"
+	top    string // key cleared up to "restricted"
 }
 
 func newFixture(t *testing.T, maxBody int64) *fixture {
@@ -75,6 +77,8 @@ func buildFixture(t *testing.T, spec fixtureSpec) *fixture {
 		t.Fatal(err)
 	}
 	narrow, narrowHash, _ := auth.GenerateKey()
+	conf, confHash, _ := auth.GenerateKey()
+	top, topHash, _ := auth.GenerateKey()
 
 	yaml := fmt.Sprintf(`
 profile: air-gapped
@@ -108,7 +112,19 @@ api_keys:
     team: research
     application: demo
     allowed_models: ["other-*"]
-`, maxBody, inflightLimit(spec.maxInflight), llm.URL, keyHash, narrowHash)
+  - id: finance
+    hash: %s
+    team: finance
+    application: ledger
+    allowed_models: ["llama-*", "broken"]
+    max_classification: confidential
+  - id: vault
+    hash: %s
+    team: security
+    application: vault
+    allowed_models: ["llama-*", "broken"]
+    max_classification: restricted
+`, maxBody, inflightLimit(spec.maxInflight), llm.URL, keyHash, narrowHash, confHash, topHash)
 
 	cfg, err := config.Parse([]byte(yaml))
 	if err != nil {
@@ -146,7 +162,7 @@ api_keys:
 	t.Cleanup(gw.Close)
 	admin := httptest.NewServer(NewAdminHandler(holder, m, nil))
 	t.Cleanup(admin.Close)
-	return &fixture{gw: gw, admin: admin, sink: sink, key: key, narrow: narrow}
+	return &fixture{gw: gw, admin: admin, sink: sink, key: key, narrow: narrow, conf: conf, top: top}
 }
 
 func (f *fixture) post(t *testing.T, key, body string) *http.Response {
@@ -559,7 +575,7 @@ type stubAuth struct{ id *auth.Identity }
 func (s stubAuth) Authenticate(*http.Request) (*auth.Identity, error) { return s.id, nil }
 
 func TestUsageEventForAnOIDCIdentity(t *testing.T) {
-	id := &auth.Identity{Subject: "user-123", Team: "research", Application: "notebook", AllowedModels: []string{"llama-*"}, Method: "oidc"}
+	id := &auth.Identity{Subject: "user-123", Team: "research", Application: "notebook", AllowedModels: []string{"llama-*"}, Method: "oidc", MaxClassification: config.LabelInternal}
 	f := newFixtureSink(t, 1<<20, nil, func(d *Deps) { d.Auth = stubAuth{id} })
 
 	resp := f.post(t, "any-token", `{"model":"llama-70b","messages":[{"role":"user","content":"hi"}]}`)

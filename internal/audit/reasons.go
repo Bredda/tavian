@@ -26,6 +26,7 @@ var (
 	InvalidRequest         = Reason{"INVALID_REQUEST", "invalid_request", http.StatusBadRequest, typeInvalid}
 	RequestTooLarge        = Reason{"REQUEST_TOO_LARGE", "request_too_large", http.StatusRequestEntityTooLarge, typeInvalid}
 	ModelNotAllowed        = Reason{"MODEL_NOT_ALLOWED", "model_not_allowed", http.StatusForbidden, typeInvalid}
+	ClearanceExceeded      = Reason{"CLEARANCE_EXCEEDED", "classification_exceeds_clearance", http.StatusForbidden, typeInvalid}
 	ModelNotFound          = Reason{"MODEL_NOT_FOUND", "model_not_found", http.StatusNotFound, typeInvalid}
 	MultimodalNotInspected = Reason{"MULTIMODAL_NOT_INSPECTABLE", "multimodal_not_inspectable", http.StatusBadRequest, typeInvalid}
 	RequestTooComplex      = Reason{"REQUEST_TOO_COMPLEX", "request_too_complex", http.StatusBadRequest, typeInvalid}
@@ -42,7 +43,7 @@ var (
 // All lists the catalogue, for documentation and tests.
 func All() []Reason {
 	return []Reason{
-		Served, InvalidRequest, RequestTooLarge, ModelNotAllowed, ModelNotFound, MultimodalNotInspected,
+		Served, InvalidRequest, RequestTooLarge, ModelNotAllowed, ClearanceExceeded, ModelNotFound, MultimodalNotInspected,
 		RequestTooComplex, InspectionFailed, UpstreamUnavailable, UpstreamError, StreamInterrupted, ClientDisconnected,
 	}
 }

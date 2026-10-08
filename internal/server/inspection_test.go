@@ -211,7 +211,7 @@ func TestNoContentLeaksThroughObservability(t *testing.T) {
 	}
 	var errorBodies []string
 	for name, body := range bodies {
-		resp := f.post(t, f.key, body)
+		resp := f.post(t, f.top, body)
 		b, _ := io.ReadAll(resp.Body)
 		if name == "answered" || name == "streamed" {
 			continue // the model may echo the prompt back to the caller who sent it
