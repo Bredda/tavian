@@ -22,6 +22,8 @@ type Snapshot struct {
 	LoadedAt time.Time
 	Profile  Profile
 	Limits   LimitsConfig
+	// DocsEnabled says whether the API reference is served.
+	DocsEnabled bool
 
 	Backends map[string]*Backend
 	Models   map[string]*Model
@@ -73,14 +75,15 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 
 	sum := sha256.Sum256(raw)
 	s := &Snapshot{
-		Revision:  hex.EncodeToString(sum[:])[:12],
-		LoadedAt:  time.Now().UTC(),
-		Profile:   cfg.Profile,
-		Limits:    cfg.Limits,
-		Backends:  map[string]*Backend{},
-		Models:    map[string]*Model{},
-		Keys:      map[string]*APIKey{},
-		Endpoints: map[string]DestinationClass{},
+		Revision:    hex.EncodeToString(sum[:])[:12],
+		LoadedAt:    time.Now().UTC(),
+		Profile:     cfg.Profile,
+		Limits:      cfg.Limits,
+		DocsEnabled: cfg.Docs.Enabled == nil || *cfg.Docs.Enabled,
+		Backends:    map[string]*Backend{},
+		Models:      map[string]*Model{},
+		Keys:        map[string]*APIKey{},
+		Endpoints:   map[string]DestinationClass{},
 	}
 
 	for i := range cfg.Backends {

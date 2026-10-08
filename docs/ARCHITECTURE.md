@@ -166,6 +166,7 @@ internal/router/           ✓ model → backend (first target; strategies and h
 internal/provider/openai/  ✓ OpenAI-compatible adapter: streaming relay + usage extraction
 internal/meter/            ✓ multi-dimensional UsageEvent + sinks: PostgreSQL outbox with disk spool, log sink (dev)
 internal/server/           ✓ data-plane and admin HTTP handlers, middleware, Prometheus metrics
+internal/docs/             ✓ embedded OpenAPI description + Scalar viewer served at /docs (offline, strict CSP)
 internal/mockllm/          ✓ mock backend implementation
 internal/glob, ids, version  ✓ small utilities
 internal/inspect/          · detectors, classification, findings (M2)

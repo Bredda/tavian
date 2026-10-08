@@ -95,6 +95,7 @@ type Config struct {
 	Log      LogConfig      `yaml:"log"`
 	Egress   EgressConfig   `yaml:"egress"`
 	Database DatabaseConfig `yaml:"database"`
+	Docs     DocsConfig     `yaml:"docs"`
 	Backends []Backend      `yaml:"backends"`
 	Models   []Model        `yaml:"models"`
 	APIKeys  []APIKey       `yaml:"api_keys"`
@@ -118,6 +119,14 @@ type LimitsConfig struct {
 type LogConfig struct {
 	Level  string `yaml:"level"`  // debug | info | warn | error
 	Format string `yaml:"format"` // json | text
+}
+
+// DocsConfig controls the API reference served by the data plane.
+type DocsConfig struct {
+	// Enabled serves /docs and /openapi.yaml, without authentication. They
+	// describe the API only and hold no deployment-specific information.
+	// Defaults to true.
+	Enabled *bool `yaml:"enabled"`
 }
 
 // DatabaseConfig locates PostgreSQL (ADR-0001). It cannot change on reload.

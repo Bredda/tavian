@@ -2,3 +2,7 @@ Tavian
 Copyright 2026 The Tavian Authors
 
 This product includes software developed by The Tavian Authors.
+
+This product embeds the Scalar API Reference (MIT License,
+https://github.com/scalar/scalar) to serve its API documentation; see
+internal/docs/assets/SCALAR.md.

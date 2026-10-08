@@ -18,10 +18,12 @@ import (
 
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/docs"
 	"github.com/bredda/tavian/internal/ids"
 	"github.com/bredda/tavian/internal/meter"
 	"github.com/bredda/tavian/internal/provider/openai"
 	"github.com/bredda/tavian/internal/router"
+	"github.com/bredda/tavian/internal/version"
 )
 
 // Deps are the collaborators of the data plane.
@@ -48,6 +50,10 @@ func NewDataHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", s.instrument("chat_completions", s.chat))
 	mux.HandleFunc("GET /v1/models", s.instrument("models", s.models))
+	docs.Register(mux, version.String(), func() bool {
+		snap := d.Snap.Load()
+		return snap != nil && snap.DocsEnabled
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "invalid_request_error", "not_found", "unknown endpoint")
 	})
