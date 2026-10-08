@@ -185,7 +185,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 
 	// call provider and relay the response
 	start := time.Now()
-	res, err := s.Provider.ChatCompletions(ctx, w, route.Backend, upstreamBody, r.Header.Get("Accept"))
+	res, err := s.Provider.ChatCompletions(ctx, w, route.Backend, upstreamBody, r.Header.Get("Accept"), model)
 
 	outcome := "ok"
 	switch {

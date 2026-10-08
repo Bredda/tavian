@@ -40,9 +40,12 @@ test("unknown request fields reach the backend", async () => {
   }
 });
 
-test("the backend sees its own model name", async () => {
+test("model name is mapped in and out", async () => {
   const resp = await client().chat.completions.create({ model: "chat", messages: user("hi") });
-  assert.equal(resp.model, "mock");
+  // The backend was asked for its own name (the mock reports it)...
+  assert.equal(resp.x_mock_received_model, "mock");
+  // ...but the client gets back the name it used.
+  assert.equal(resp.model, "chat");
 });
 
 test("request id header, and the caller's one is kept", async () => {

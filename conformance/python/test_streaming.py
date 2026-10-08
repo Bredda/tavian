@@ -17,6 +17,11 @@ def test_stream_assembles_the_same_text(client):
     assert [c.choices[0].finish_reason for c in chunks if c.choices][-1] == "stop"
 
 
+def test_every_chunk_carries_the_clients_model_name(client):
+    chunks, _ = collect(client.chat.completions.create(model="chat", messages=user("Count"), stream=True))
+    assert {c.model for c in chunks} == {"chat"}
+
+
 def test_usage_chunk_when_requested(client):
     chunks, _ = collect(
         client.chat.completions.create(

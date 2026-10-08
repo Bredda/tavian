@@ -41,9 +41,12 @@ def test_unknown_request_fields_reach_the_backend(client):
         assert expected in keys, keys
 
 
-def test_the_backend_sees_its_own_model_name(client):
+def test_model_name_is_mapped_in_and_out(client):
     resp = client.chat.completions.create(model="chat", messages=user("hi"))
-    assert resp.model == "mock"  # Tavian maps the client's name to the backend's
+    # The backend was asked for its own name (the mock reports it)...
+    assert resp.model_extra["x_mock_received_model"] == "mock"
+    # ...but the client gets back the name it used.
+    assert resp.model == "chat"
 
 
 def test_request_id_header(client):

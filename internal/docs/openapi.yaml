@@ -16,7 +16,9 @@ info:
     ## What differs from OpenAI
 
     - **Model names are Tavian's.** `GET /v1/models` lists the names your key
-      may use; Tavian maps each to a backend and the backend's own model name.
+      may use; Tavian maps each to a backend and the backend's own model name,
+      and puts your name back in the `model` field of the response (and of every
+      streamed chunk), so you never see the backend's.
     - **Keys carry an allow-list of models.** A key may only use the models it
       was granted (`403 model_not_allowed` otherwise, and they are filtered out
       of `/v1/models`).

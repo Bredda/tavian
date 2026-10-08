@@ -12,6 +12,12 @@ test("stream assembles the same text", async () => {
   assert.equal(finishes.at(-1), "stop");
 });
 
+test("every chunk carries the client's model name", async () => {
+  const stream = await client().chat.completions.create({ model: "chat", messages: user("Count"), stream: true });
+  const { chunks } = await collect(stream);
+  assert.deepEqual(new Set(chunks.map((c) => c.model)), new Set(["chat"]));
+});
+
 test("usage chunk when requested", async () => {
   const stream = await client().chat.completions.create({
     model: "chat",

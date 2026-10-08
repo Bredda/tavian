@@ -100,9 +100,14 @@ func RewriteChat(raw []byte, upstreamModel string) ([]byte, error) {
 
 // ChatCompletions sends body to the backend and relays the answer to w.
 //
+// asModel, when not empty, is the model name the client asked for: Tavian maps
+// it to the backend's own name on the way in, so on the way out the "model"
+// field of the response (and of every stream chunk) is put back, and the client
+// never sees a name it did not use. Error responses are relayed untouched.
+//
 // Only an explicit set of headers is sent upstream: in particular the client's
 // Authorization header (a Tavian key) must never reach a provider.
-func (c *Client) ChatCompletions(ctx context.Context, w http.ResponseWriter, b *config.Backend, body []byte, accept string) (Result, error) {
+func (c *Client) ChatCompletions(ctx context.Context, w http.ResponseWriter, b *config.Backend, body []byte, accept, asModel string) (Result, error) {
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.URL.JoinPath("chat/completions").String(), bytes.NewReader(body))
 	if err != nil {
@@ -135,16 +140,18 @@ func (c *Client) ChatCompletions(ctx context.Context, w http.ResponseWriter, b *
 		if len(data) > maxBufferedResponse {
 			return Result{}, fmt.Errorf("%w: response exceeds %d bytes", ErrUpstream, maxBufferedResponse)
 		}
+		if res.Status/100 == 2 {
+			res.Usage = parseUsage(data)
+			data, _ = rewriteModel(data, asModel)
+		}
 		copyHeaders(w.Header(), resp.Header)
+		w.Header().Del("Content-Length")
 		w.WriteHeader(res.Status)
 		res.Started = true
 		if _, err := w.Write(data); err != nil {
 			return res, err
 		}
 		res.TTFB = time.Since(start)
-		if res.Status/100 == 2 {
-			res.Usage = parseUsage(data)
-		}
 		return res, nil
 	}
 
@@ -154,7 +161,7 @@ func (c *Client) ChatCompletions(ctx context.Context, w http.ResponseWriter, b *
 	w.WriteHeader(res.Status)
 	res.Started = true
 	rc := http.NewResponseController(w)
-	tap := &sseTap{}
+	tap := &sseTap{model: asModel}
 	buf := make([]byte, 16<<10)
 	for {
 		n, rerr := resp.Body.Read(buf)
@@ -162,14 +169,21 @@ func (c *Client) ChatCompletions(ctx context.Context, w http.ResponseWriter, b *
 			if res.TTFB == 0 {
 				res.TTFB = time.Since(start)
 			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				res.Usage = tap.usage
-				return res, werr
+			if out := tap.filter(buf[:n]); len(out) > 0 {
+				if _, werr := w.Write(out); werr != nil {
+					res.Usage = tap.usage
+					return res, werr
+				}
+				_ = rc.Flush() // ErrNotSupported is fine: the bytes still go out
 			}
-			_ = rc.Flush() // ErrNotSupported is fine: the bytes still go out
-			tap.write(buf[:n])
 		}
 		if rerr == io.EOF {
+			if rest := tap.rest(); len(rest) > 0 {
+				if _, werr := w.Write(rest); werr != nil {
+					res.Usage = tap.usage
+					return res, werr
+				}
+			}
 			break
 		}
 		if rerr != nil {
@@ -222,41 +236,92 @@ func parseUsage(data []byte) Usage {
 	return env.Usage.toUsage()
 }
 
-// sseTap watches a server-sent-events stream and remembers the last usage
-// object it sees. It never alters the stream.
+// rewriteModel sets the "model" field of a JSON object to name and reports
+// whether it changed anything. Anything that is not a JSON object with a
+// "model" field, or an empty name, is returned as it came.
+func rewriteModel(data []byte, name string) ([]byte, bool) {
+	if name == "" || !bytes.Contains(data, []byte(`"model"`)) {
+		return data, false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil {
+		return data, false
+	}
+	if _, ok := m["model"]; !ok {
+		return data, false
+	}
+	m["model"], _ = json.Marshal(name)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return data, false
+	}
+	return out, true
+}
+
+// sseTap sits between a server-sent-events stream and the client. It forwards
+// whole lines, putting the client's model name into each data chunk when model
+// is set, and remembers the last usage object it sees.
 type sseTap struct {
+	model string
 	buf   []byte
 	usage Usage
 }
 
 const maxSSELine = 1 << 20
 
-func (t *sseTap) write(p []byte) {
+// filter takes the next bytes of the stream and returns what can be forwarded:
+// the complete lines so far. A partial last line is held back until its end
+// arrives, or until it is so long that it is passed through unexamined.
+func (t *sseTap) filter(p []byte) []byte {
 	t.buf = append(t.buf, p...)
+	var out []byte
 	for {
 		i := bytes.IndexByte(t.buf, '\n')
 		if i < 0 {
 			break
 		}
-		t.line(t.buf[:i])
+		out = append(out, t.line(t.buf[:i])...)
+		out = append(out, '\n')
 		t.buf = t.buf[i+1:]
 	}
 	if len(t.buf) > maxSSELine {
-		t.buf = nil // a single absurdly long line: stop tracking it
+		// A single absurdly long line: stop tracking it.
+		out = append(out, t.buf...)
+		t.buf = nil
 	}
+	return out
 }
 
-func (t *sseTap) line(l []byte) {
-	l = bytes.TrimSuffix(l, []byte("\r"))
-	payload, ok := bytes.CutPrefix(l, []byte("data:"))
+// rest returns the bytes held back at the end of the stream.
+func (t *sseTap) rest() []byte {
+	r := t.buf
+	t.buf = nil
+	return r
+}
+
+// line handles one line without its newline and returns what to forward.
+func (t *sseTap) line(l []byte) []byte {
+	body := bytes.TrimSuffix(l, []byte("\r"))
+	payload, ok := bytes.CutPrefix(body, []byte("data:"))
 	if !ok {
-		return
+		return l
 	}
 	payload = bytes.TrimSpace(payload)
-	if string(payload) == "[DONE]" || !strings.Contains(string(payload), `"usage"`) {
-		return
+	if string(payload) == "[DONE]" {
+		return l
 	}
-	if u := parseUsage(payload); u.Known {
-		t.usage = u
+	if strings.Contains(string(payload), `"usage"`) {
+		if u := parseUsage(payload); u.Known {
+			t.usage = u
+		}
 	}
+	rewritten, changed := rewriteModel(payload, t.model)
+	if !changed {
+		return l
+	}
+	out := append([]byte("data: "), rewritten...)
+	if len(body) != len(l) {
+		out = append(out, '\r')
+	}
+	return out
 }
