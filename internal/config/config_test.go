@@ -228,3 +228,25 @@ func TestHolder(t *testing.T) {
 		t.Fatal("Load must return the stored snapshot")
 	}
 }
+
+func TestDatabaseSectionValidation(t *testing.T) {
+	base := "profile: air-gapped\n"
+	cfg, err := Parse([]byte(base + "database:\n  url_env: TAVIAN_TEST_DB\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Database.SpoolDir == "" || cfg.Database.SpoolMaxBytes == 0 || cfg.Database.EmitTimeout == 0 {
+		t.Errorf("defaults not applied: %+v", cfg.Database)
+	}
+	if _, err := Compile(cfg, nil, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "TAVIAN_TEST_DB") {
+		t.Errorf("unset url_env variable not reported: %v", err)
+	}
+	if _, err := Compile(cfg, nil, func(string) string { return "postgres://x" }); err != nil {
+		t.Errorf("valid database config rejected: %v", err)
+	}
+
+	small, _ := Parse([]byte(base + "database:\n  spool_max_bytes: 100\n"))
+	if _, err := Compile(small, nil, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "spool_max_bytes") {
+		t.Errorf("tiny spool accepted: %v", err)
+	}
+}

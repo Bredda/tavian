@@ -64,6 +64,13 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		addf("profile: unknown value %q", cfg.Profile)
 	}
 
+	if cfg.Database.URLEnv != "" && getenv(cfg.Database.URLEnv) == "" {
+		addf("database.url_env: environment variable %s is not set", cfg.Database.URLEnv)
+	}
+	if cfg.Database.SpoolMaxBytes < 1<<20 {
+		addf("database.spool_max_bytes: must be at least 1048576 (1 MiB)")
+	}
+
 	sum := sha256.Sum256(raw)
 	s := &Snapshot{
 		Revision:  hex.EncodeToString(sum[:])[:12],

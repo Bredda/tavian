@@ -23,6 +23,16 @@ log:
   level: info                  # debug | info | warn | error
   format: json                 # json | text
 
+# PostgreSQL records usage events (transactional outbox) and every configuration
+# revision. Without this section the gateway only logs events: development only.
+# Create the schema with:  tavian migrate -config tavian.yaml
+# Changing this section requires a restart.
+# database:
+#   url_env: TAVIAN_DATABASE_URL          # e.g. postgres://tavian:...@db:5432/tavian?sslmode=verify-full
+#   spool_dir: /var/lib/tavian/spool      # holds events while PostgreSQL is down: use persistent storage
+#   spool_max_bytes: 67108864             # when full and PostgreSQL is still down, requests get 503
+#   emit_timeout: 2s
+
 # What counts as "internal" for the egress guard. Defaults: loopback, RFC 1918,
 # link-local, IPv6 ULA. Internal backends (and all backends when air-gapped)
 # must resolve inside these ranges.

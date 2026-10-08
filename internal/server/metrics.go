@@ -16,6 +16,8 @@ type Metrics struct {
 	requests *prometheus.CounterVec
 	duration *prometheus.HistogramVec
 	tokens   *prometheus.CounterVec
+
+	eventsLost prometheus.Counter
 }
 
 // NewMetrics creates a private registry (no global state) with the Go and
@@ -36,11 +38,15 @@ func NewMetrics() *Metrics {
 			Name: "tavian_tokens_total",
 			Help: "Tokens processed, by model, backend and direction (input|output).",
 		}, []string{"model", "backend", "direction"}),
+		eventsLost: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "tavian_usage_events_lost_total",
+			Help: "Usage events that could be neither stored nor spooled. Any increase is an audit gap.",
+		}),
 	}
 	m.reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		m.requests, m.duration, m.tokens,
+		m.requests, m.duration, m.tokens, m.eventsLost,
 	)
 	return m
 }
@@ -48,4 +54,24 @@ func NewMetrics() *Metrics {
 // Handler serves the metrics in Prometheus text format.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
+}
+
+// WatchStorage exposes the state of the usage-event pipeline: whether the
+// database is believed reachable and how many bytes wait in the spool.
+func (m *Metrics) WatchStorage(up func() bool, spoolBytes func() int64) {
+	m.reg.MustRegister(
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "tavian_database_up",
+			Help: "1 if PostgreSQL is believed reachable, 0 if events are being spooled.",
+		}, func() float64 {
+			if up() {
+				return 1
+			}
+			return 0
+		}),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "tavian_spool_bytes",
+			Help: "Bytes of usage events waiting on disk for PostgreSQL.",
+		}, func() float64 { return float64(spoolBytes()) }),
+	)
 }

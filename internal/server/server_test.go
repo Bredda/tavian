@@ -29,6 +29,12 @@ type fixture struct {
 
 func newFixture(t *testing.T, maxBody int64) *fixture {
 	t.Helper()
+	return newFixtureSink(t, maxBody, nil)
+}
+
+// newFixtureSink lets a test wrap the in-memory sink, e.g. to refuse requests.
+func newFixtureSink(t *testing.T, maxBody int64, wrap func(*meter.MemorySink) meter.Sink) *fixture {
+	t.Helper()
 	llm := httptest.NewServer(mockllm.Handler())
 	t.Cleanup(llm.Close)
 
@@ -93,12 +99,12 @@ api_keys:
 		Snap:     holder,
 		Auth:     auth.APIKeyAuthenticator{Snap: holder},
 		Provider: openai.New(guard.HTTPClient(snap.Limits.UpstreamHeaderTimeout), "tavian/test"),
-		Sink:     sink,
+		Sink:     sinkFor(sink, wrap),
 		Log:      log,
 		Metrics:  m,
 	}))
 	t.Cleanup(gw.Close)
-	admin := httptest.NewServer(NewAdminHandler(holder, m))
+	admin := httptest.NewServer(NewAdminHandler(holder, m, nil))
 	t.Cleanup(admin.Close)
 	return &fixture{gw: gw, admin: admin, sink: sink, key: key, narrow: narrow}
 }
@@ -377,7 +383,7 @@ func TestAdminEndpoints(t *testing.T) {
 }
 
 func TestReadyzWithoutSnapshot(t *testing.T) {
-	ts := httptest.NewServer(NewAdminHandler(&config.Holder{}, NewMetrics()))
+	ts := httptest.NewServer(NewAdminHandler(&config.Holder{}, NewMetrics(), nil))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/readyz")
 	if err != nil {
@@ -386,5 +392,57 @@ func TestReadyzWithoutSnapshot(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
+func sinkFor(m *meter.MemorySink, wrap func(*meter.MemorySink) meter.Sink) meter.Sink {
+	if wrap == nil {
+		return m
+	}
+	return wrap(m)
+}
+
+// refusingSink records events but reports that none can be admitted.
+type refusingSink struct{ *meter.MemorySink }
+
+func (refusingSink) Admit() error { return meter.ErrAuditUnavailable }
+
+func TestChatIsRefusedWhenAuditTrailCannotRecord(t *testing.T) {
+	f := newFixtureSink(t, 1<<20, func(m *meter.MemorySink) meter.Sink { return refusingSink{m} })
+
+	resp := f.post(t, f.key, `{"model":"llama-70b","messages":[{"role":"user","content":"hi"}]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+	if got := errorCode(t, resp); got != "audit_unavailable" {
+		t.Errorf("error code = %q", got)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("missing Retry-After")
+	}
+	if n := len(f.sink.Events()); n != 0 {
+		t.Errorf("a refused request must not reach the backend or be metered, got %d events", n)
+	}
+	// Unauthenticated callers learn nothing about the audit state.
+	resp2 := f.post(t, "", `{}`)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unauthenticated status = %d, want 401", resp2.StatusCode)
+	}
+}
+
+func TestReadyzReflectsAuditTrail(t *testing.T) {
+	holder := &config.Holder{}
+	holder.Store(&config.Snapshot{})
+	srv := httptest.NewServer(NewAdminHandler(holder, NewMetrics(), refusingSink{}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("readyz = %d, want 503 when events cannot be recorded", resp.StatusCode)
 	}
 }

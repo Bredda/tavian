@@ -55,7 +55,10 @@ func NewDataHandler(d Deps) http.Handler {
 }
 
 // NewAdminHandler returns the health, readiness and metrics endpoints.
-func NewAdminHandler(snap *config.Holder, m *Metrics) http.Handler {
+//
+// audit may be nil. When set, readiness also requires that the audit trail can
+// still record events: a gateway that must refuse requests is not ready.
+func NewAdminHandler(snap *config.Holder, m *Metrics, audit meter.Admitter) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok\n")
@@ -64,6 +67,12 @@ func NewAdminHandler(snap *config.Holder, m *Metrics) http.Handler {
 		if snap.Load() == nil {
 			http.Error(w, "no configuration loaded", http.StatusServiceUnavailable)
 			return
+		}
+		if audit != nil {
+			if err := audit.Admit(); err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
 		}
 		_, _ = io.WriteString(w, "ready\n")
 	})
@@ -111,6 +120,17 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	if err != nil {
 		unauthorized(w)
 		return "unauthenticated"
+	}
+
+	// Fail closed (ADR-0005): do not serve a request whose usage event could
+	// not be recorded.
+	if a, ok := s.Sink.(meter.Admitter); ok {
+		if err := a.Admit(); err != nil {
+			s.Log.ErrorContext(ctx, "refusing request", "error", err)
+			w.Header().Set("Retry-After", "5")
+			writeError(w, http.StatusServiceUnavailable, "server_error", "audit_unavailable", "the gateway cannot record this request right now")
+			return "audit_unavailable"
+		}
 	}
 
 	// receive (bounded)
@@ -203,8 +223,10 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	// Detached from the request context: the client may be gone, the event is
 	// still owed.
 	if err := s.Sink.Emit(context.WithoutCancel(ctx), ev); err != nil {
-		// TODO(M1 storage): once events are the audit trail, a failing sink must fail closed.
-		s.Log.ErrorContext(ctx, "emit usage event", "error", err)
+		// Admit makes this rare; when it still happens the request is already
+		// served, so all that is left is to say loudly that an event is lost.
+		s.Metrics.eventsLost.Inc()
+		s.Log.ErrorContext(ctx, "usage event lost", "request_id", ev.RequestID, "error", err)
 	}
 	if res.Usage.Known {
 		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "input").Add(float64(res.Usage.Input))

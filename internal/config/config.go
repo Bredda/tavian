@@ -89,14 +89,15 @@ func defaultMaxClassification(c DestinationClass) Classification {
 // Config is the on-disk configuration (YAML). Unknown fields are rejected: in a
 // security product a typo must not silently weaken a setting.
 type Config struct {
-	Profile  Profile      `yaml:"profile"`
-	Listen   ListenConfig `yaml:"listen"`
-	Limits   LimitsConfig `yaml:"limits"`
-	Log      LogConfig    `yaml:"log"`
-	Egress   EgressConfig `yaml:"egress"`
-	Backends []Backend    `yaml:"backends"`
-	Models   []Model      `yaml:"models"`
-	APIKeys  []APIKey     `yaml:"api_keys"`
+	Profile  Profile        `yaml:"profile"`
+	Listen   ListenConfig   `yaml:"listen"`
+	Limits   LimitsConfig   `yaml:"limits"`
+	Log      LogConfig      `yaml:"log"`
+	Egress   EgressConfig   `yaml:"egress"`
+	Database DatabaseConfig `yaml:"database"`
+	Backends []Backend      `yaml:"backends"`
+	Models   []Model        `yaml:"models"`
+	APIKeys  []APIKey       `yaml:"api_keys"`
 }
 
 type ListenConfig struct {
@@ -117,6 +118,23 @@ type LimitsConfig struct {
 type LogConfig struct {
 	Level  string `yaml:"level"`  // debug | info | warn | error
 	Format string `yaml:"format"` // json | text
+}
+
+// DatabaseConfig locates PostgreSQL (ADR-0001). It cannot change on reload.
+type DatabaseConfig struct {
+	// URLEnv names the environment variable holding the connection URL, so
+	// the credential never sits in the configuration file. Without it the
+	// gateway runs without storage: usage events are only logged, which is
+	// meant for development and is announced at startup.
+	URLEnv string `yaml:"url_env"`
+	// SpoolDir holds usage events while PostgreSQL is unavailable. It must be
+	// on persistent storage.
+	SpoolDir string `yaml:"spool_dir"`
+	// SpoolMaxBytes bounds the spool; when it is full and PostgreSQL is still
+	// down, new requests are refused rather than served unrecorded.
+	SpoolMaxBytes int64 `yaml:"spool_max_bytes"`
+	// EmitTimeout bounds one event write on the request path.
+	EmitTimeout time.Duration `yaml:"emit_timeout"`
 }
 
 type EgressConfig struct {
@@ -226,6 +244,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Log.Format == "" {
 		c.Log.Format = "json"
+	}
+	if c.Database.SpoolDir == "" {
+		c.Database.SpoolDir = "/var/lib/tavian/spool"
+	}
+	if c.Database.SpoolMaxBytes == 0 {
+		c.Database.SpoolMaxBytes = 64 << 20
+	}
+	if c.Database.EmitTimeout == 0 {
+		c.Database.EmitTimeout = 2 * time.Second
 	}
 	if len(c.Egress.InternalCIDRs) == 0 {
 		c.Egress.InternalCIDRs = DefaultInternalCIDRs()

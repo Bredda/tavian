@@ -36,9 +36,11 @@ Progress (skeleton merged = ✓):
 - [x] Multi-dimensional `UsageEvent` (money/energy/carbon null for now), emitted to a log sink
 - [x] Content-free structured logs, `/healthz`, `/readyz`, `/metrics`
 - [x] Compose demo on an Internet-less network (gateway + mock backend)
-- [ ] PostgreSQL: migrations, usage events via transactional outbox ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)), snapshot persisted
+- [x] PostgreSQL: embedded migrations (`tavian migrate`), usage events via transactional outbox ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)) with a bounded disk spool and fail-closed admission, every config revision persisted
+- [ ] Outbox consumers (rollups, export) and retention: events accumulate until they exist
 - [ ] Generic OIDC bearer validation (JWKS cache with max staleness) behind the `Authenticator` interface
-- [ ] Keycloak + PostgreSQL in the compose stack
+- [x] PostgreSQL in the compose stack
+- [ ] Keycloak in the compose stack
 - [ ] Conformance tests against the OpenAI SDKs (non-streaming, streaming, tool calls)
 
 ## M2 — The finance demo ("prove it")

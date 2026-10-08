@@ -20,6 +20,8 @@ import (
 	"github.com/bredda/tavian/internal/meter"
 	"github.com/bredda/tavian/internal/provider/openai"
 	"github.com/bredda/tavian/internal/server"
+	"github.com/bredda/tavian/internal/spool"
+	"github.com/bredda/tavian/internal/store"
 	"github.com/bredda/tavian/internal/version"
 )
 
@@ -28,6 +30,7 @@ const usage = `Usage: tavian <command> [flags]
 Commands:
   serve      Run the gateway
   validate   Check a configuration file and exit
+  migrate    Apply pending database migrations and exit
   keygen     Generate an API key and the hash to put in the configuration
   version    Print the version
 
@@ -46,6 +49,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdServe(args[1:], stdout, stderr)
 	case "validate":
 		return cmdValidate(args[1:], stdout, stderr)
+	case "migrate":
+		return cmdMigrate(args[1:], stdout, stderr)
 	case "keygen":
 		return cmdKeygen(stdout, stderr)
 	case "version":
@@ -101,6 +106,45 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func cmdMigrate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := configFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	cfg, raw, err := config.Load(*path)
+	if err == nil {
+		_, err = config.Compile(cfg, raw, os.Getenv)
+	}
+	if err == nil && cfg.Database.URLEnv == "" {
+		err = errors.New("database.url_env is not set in the configuration")
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "tavian:", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	st, err := store.Open(ctx, os.Getenv(cfg.Database.URLEnv))
+	if err != nil {
+		fmt.Fprintln(stderr, "tavian:", err)
+		return 1
+	}
+	defer st.Close()
+	applied, err := st.Migrate(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "tavian:", err)
+		return 1
+	}
+	if len(applied) == 0 {
+		fmt.Fprintln(stdout, "database schema is up to date")
+	} else {
+		fmt.Fprintf(stdout, "applied migrations: %v\n", applied)
+	}
+	return 0
+}
+
 func cmdServe(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -130,11 +174,47 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	metrics := server.NewMetrics()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var (
+		sink    meter.Sink = meter.LogSink{Log: log}
+		audit   meter.Admitter
+		st      *store.Store
+		flushed = make(chan struct{})
+
+		stopFlush = func() {}
+	)
+	if cfg.Database.URLEnv == "" {
+		log.Warn("no database configured: usage events are only logged, not stored (development mode)")
+		close(flushed)
+	} else {
+		var outbox *meter.OutboxSink
+		st, outbox, err = openStorage(ctx, cfg.Database, snap, raw, log)
+		if err != nil {
+			log.Error("storage", "error", err)
+			return 1
+		}
+		defer st.Close()
+		sink, audit = outbox, outbox
+		metrics.WatchStorage(outbox.Up, outbox.Spool.Size)
+		// The replay loop outlives the signal context: in-flight requests
+		// still emit events while the servers drain.
+		var flushCtx context.Context
+		flushCtx, stopFlush = context.WithCancel(context.Background())
+		defer stopFlush()
+		go func() {
+			defer close(flushed)
+			outbox.Run(flushCtx)
+		}()
+	}
+
 	deps := server.Deps{
 		Snap:     holder,
 		Auth:     auth.APIKeyAuthenticator{Snap: holder},
 		Provider: openai.New(guard.HTTPClient(cfg.Limits.UpstreamHeaderTimeout), "tavian/"+version.String()),
-		Sink:     meter.LogSink{Log: log},
+		Sink:     sink,
 		Log:      log,
 		Metrics:  metrics,
 	}
@@ -148,12 +228,9 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	}
 	admin := &http.Server{
 		Addr:              cfg.Listen.Admin,
-		Handler:           server.NewAdminHandler(holder, metrics),
+		Handler:           server.NewAdminHandler(holder, metrics, audit),
 		ReadHeaderTimeout: cfg.Limits.ReadHeaderTimeout,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	// SIGHUP reloads the configuration. A reload that fails validation leaves
 	// the last known good snapshot in place (ADR-0003).
@@ -161,7 +238,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
-			reload(log, *path, cfg.Profile, holder)
+			reload(ctx, log, *path, cfg, holder, st)
 		}
 	}()
 
@@ -194,17 +271,64 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 			code = 1
 		}
 	}
+	// Requests are done: stop the replay loop and let it empty the spool once.
+	stopFlush()
+	<-flushed
 	return code
 }
 
-func reload(log *slog.Logger, path string, running config.Profile, holder *config.Holder) {
+// openStorage connects, insists on an up-to-date schema, records the running
+// configuration revision and prepares the usage-event sink.
+func openStorage(ctx context.Context, db config.DatabaseConfig, snap *config.Snapshot, raw []byte, log *slog.Logger) (*store.Store, *meter.OutboxSink, error) {
+	st, err := store.Open(ctx, os.Getenv(db.URLEnv))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := st.CheckSchema(ctx); err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	sp, err := spool.Open(db.SpoolDir, db.SpoolMaxBytes)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	if err := saveRevision(ctx, st, snap, raw); err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	if n := sp.Size(); n > 0 {
+		log.Info("usage events from a previous run are waiting in the spool", "bytes", n)
+	}
+	return st, &meter.OutboxSink{Store: st, Spool: sp, Log: log, Timeout: db.EmitTimeout}, nil
+}
+
+func saveRevision(ctx context.Context, st *store.Store, snap *config.Snapshot, raw []byte) error {
+	return st.SaveRevision(ctx, store.Revision{
+		ID: snap.Revision, Profile: string(snap.Profile), YAML: raw, Version: version.String(),
+	})
+}
+
+// reload recompiles the configuration file. The new revision is recorded in
+// the database before it goes live, so every usage event can be traced back to
+// a stored configuration; if that fails, or anything fails validation, the
+// current revision stays.
+func reload(ctx context.Context, log *slog.Logger, path string, running *config.Config, holder *config.Holder, st *store.Store) {
 	cfg, raw, err := config.Load(path)
-	if err == nil && cfg.Profile != running {
-		err = fmt.Errorf("profile changed from %q to %q: restart required", running, cfg.Profile)
+	if err == nil && cfg.Profile != running.Profile {
+		err = fmt.Errorf("profile changed from %q to %q: restart required", running.Profile, cfg.Profile)
+	}
+	if err == nil && cfg.Database != running.Database {
+		err = errors.New("database settings changed: restart required")
 	}
 	var snap *config.Snapshot
 	if err == nil {
 		snap, err = config.Compile(cfg, raw, os.Getenv)
+	}
+	if err == nil && st != nil {
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err = saveRevision(rctx, st, snap, raw)
+		cancel()
 	}
 	if err != nil {
 		log.Error("configuration reload rejected, keeping current revision",

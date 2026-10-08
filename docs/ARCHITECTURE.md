@@ -157,14 +157,14 @@ PostgreSQL is the source of truth for configuration, usage aggregates and audit.
 Package layout (✓ = present in the M1 skeleton, the rest are placeholders with a `doc.go` or planned):
 
 ```
-cmd/tavian/                ✓ entrypoint: serve, validate, keygen, version (later: migrate, verify-audit, policy test)
+cmd/tavian/                ✓ entrypoint: serve, validate, migrate, keygen, version (later: verify-audit, policy test)
 cmd/mockllm/               ✓ fake OpenAI-compatible backend for demos and tests
 internal/config/           ✓ strict YAML → validated, immutable Snapshot; profile rules; Holder
 internal/auth/             ✓ API keys + Identity (OIDC planned behind the same interface)
 internal/egress/           ✓ the only outbound dialer: allow-list + internal-address enforcement
 internal/router/           ✓ model → backend (first target; strategies and health later)
 internal/provider/openai/  ✓ OpenAI-compatible adapter: streaming relay + usage extraction
-internal/meter/            ✓ multi-dimensional UsageEvent + sinks (PostgreSQL outbox planned)
+internal/meter/            ✓ multi-dimensional UsageEvent + sinks: PostgreSQL outbox with disk spool, log sink (dev)
 internal/server/           ✓ data-plane and admin HTTP handlers, middleware, Prometheus metrics
 internal/mockllm/          ✓ mock backend implementation
 internal/glob, ids, version  ✓ small utilities
@@ -173,7 +173,8 @@ internal/policy/           · YAML + CEL evaluation, decision records (M2)
 internal/quota/            · admission, reserve/settle, counters (M2)
 internal/audit/            · decision records, hash chain, encryption (M2/M4)
 internal/admin/            · control-plane API (M3)
-internal/store/            · PostgreSQL access and migrations (next M1 step)
+internal/store/            ✓ PostgreSQL access (pgx): embedded migrations, outbox, config revisions
+internal/spool/            ✓ bounded on-disk queue for events while PostgreSQL is down
 ```
 
 ## 9. Scaling path
