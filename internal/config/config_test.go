@@ -352,3 +352,17 @@ backends:
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestMaxInflight(t *testing.T) {
+	cfg, err := Parse([]byte("profile: air-gapped\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Limits.MaxInflight != 256 {
+		t.Errorf("default max_inflight = %d", cfg.Limits.MaxInflight)
+	}
+	bad, _ := Parse([]byte("profile: air-gapped\nlimits: {max_inflight: -1}\n"))
+	if _, err := Compile(bad, nil, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "max_inflight") {
+		t.Errorf("negative max_inflight accepted: %v", err)
+	}
+}

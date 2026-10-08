@@ -76,6 +76,10 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		addf("database.spool_max_bytes: must be at least 1048576 (1 MiB)")
 	}
 
+	if cfg.Limits.MaxInflight < 1 {
+		addf("limits.max_inflight: must be at least 1")
+	}
+
 	sum := sha256.Sum256(raw)
 	s := &Snapshot{
 		Revision:    hex.EncodeToString(sum[:])[:12],
