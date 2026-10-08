@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/bredda/tavian/internal/auth"
@@ -47,6 +48,7 @@ func RequestID(ctx context.Context) string {
 // NewDataHandler returns the OpenAI-compatible API.
 func NewDataHandler(d Deps) http.Handler {
 	s := &server{Deps: d}
+	d.Metrics.WatchInflight(func() float64 { return float64(s.inflight.Load()) })
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", s.instrument("chat_completions", s.chat))
 	mux.HandleFunc("GET /v1/models", s.instrument("models", s.models))
@@ -86,7 +88,10 @@ func NewAdminHandler(snap *config.Holder, m *Metrics, audit meter.Admitter) http
 	return mux
 }
 
-type server struct{ Deps }
+type server struct {
+	Deps
+	inflight atomic.Int64
+}
 
 // models lists the models the caller may use.
 func (s *server) models(w http.ResponseWriter, r *http.Request) string {
@@ -254,13 +259,28 @@ type handlerFunc func(http.ResponseWriter, *http.Request) string
 func (s *server) instrument(route string, h handlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		outcome := h(w, r)
+		outcome := s.admit(w, h, r)
 		if outcome == "" {
 			outcome = "ok"
 		}
 		s.Metrics.requests.WithLabelValues(route, outcome).Inc()
 		s.Metrics.duration.WithLabelValues(route).Observe(time.Since(start).Seconds())
 	}
+}
+
+// admit enforces limits.max_inflight before any other work: a gateway that
+// takes on more requests than it can hold (each may buffer a request body and
+// stream for minutes) serves nobody well. The limit is read from the current
+// snapshot, so a reload changes it.
+func (s *server) admit(w http.ResponseWriter, h handlerFunc, r *http.Request) string {
+	n := s.inflight.Add(1)
+	defer s.inflight.Add(-1)
+	if snap := s.Snap.Load(); snap != nil && n > int64(snap.Limits.MaxInflight) {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "server_error", "server_busy", "the gateway is handling too many requests, retry shortly")
+		return "overloaded"
+	}
+	return h(w, r)
 }
 
 func (s *server) requestID(next http.Handler) http.Handler {

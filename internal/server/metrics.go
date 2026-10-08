@@ -85,3 +85,11 @@ func (m *Metrics) WatchOIDC(keysAgeSeconds func() float64) {
 		Help: "Age of the cached OIDC signing keys in seconds, -1 if none were fetched yet.",
 	}, keysAgeSeconds))
 }
+
+// WatchInflight exposes the number of API requests being handled right now.
+func (m *Metrics) WatchInflight(inflight func() float64) {
+	m.reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "tavian_inflight_requests",
+		Help: "API requests being handled right now (limits.max_inflight caps this).",
+	}, inflight))
+}

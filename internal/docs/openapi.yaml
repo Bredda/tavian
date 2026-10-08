@@ -371,8 +371,10 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Unavailable:
       description: |
-        The gateway is not ready (`not_ready`) or cannot record the request
-        right now (`audit_unavailable`, with `Retry-After`). Retry later.
+        The gateway is not ready (`not_ready`), cannot record the request
+        right now (`audit_unavailable`), or is handling too many requests
+        (`server_busy`, `limits.max_inflight`). Retry shortly; `Retry-After`
+        says when.
       headers:
         Retry-After:
           schema: { type: integer }

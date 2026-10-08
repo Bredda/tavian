@@ -16,6 +16,7 @@ listen:
 
 limits:
   max_request_bytes: 4194304   # 4 MiB
+  max_inflight: 256            # API requests handled at once (a stream counts until it ends); beyond it: 503 + Retry-After
   upstream_header_timeout: 120s
   shutdown_grace: 30s
 

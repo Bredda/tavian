@@ -111,7 +111,11 @@ type ListenConfig struct {
 }
 
 type LimitsConfig struct {
-	MaxRequestBytes       int64         `yaml:"max_request_bytes"`
+	MaxRequestBytes int64 `yaml:"max_request_bytes"`
+	// MaxInflight caps the API requests being handled at once (streams count
+	// until they end). Past it requests get 503 with Retry-After, before any
+	// further work is spent on them. Default 256.
+	MaxInflight           int           `yaml:"max_inflight"`
 	ReadHeaderTimeout     time.Duration `yaml:"read_header_timeout"`
 	UpstreamHeaderTimeout time.Duration `yaml:"upstream_header_timeout"`
 	ShutdownGrace         time.Duration `yaml:"shutdown_grace"`
@@ -289,6 +293,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Limits.MaxRequestBytes == 0 {
 		c.Limits.MaxRequestBytes = 4 << 20
+	}
+	if c.Limits.MaxInflight == 0 {
+		c.Limits.MaxInflight = 256
 	}
 	if c.Limits.ReadHeaderTimeout == 0 {
 		c.Limits.ReadHeaderTimeout = 10 * time.Second

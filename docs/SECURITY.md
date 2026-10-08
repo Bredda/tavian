@@ -159,7 +159,7 @@ Status as of v0.1.0. Items are meant to become tests.
 - [x] Run as non-root, read-only filesystem, no capabilities (image and compose file)
 - [x] Separate listeners/ports for data plane and admin
 - [ ] TLS everywhere; mTLS to PostgreSQL and internal backends where possible. *Database TLS works through the URL; native listener TLS and backend mTLS: M3*
-- [ ] Request size, header, and concurrency limits. *Size and header limits done; an in-flight cap is next*
+- [x] Request size, header, and concurrency limits (`limits.max_request_bytes`, header timeout, `limits.max_inflight`)
 - [ ] CI check that no code path logs request/response bodies. *Planned with content inspection (M2): a canary test across success, error and stream paths, plus lint*
 - [x] CI check that outbound connections only originate from the egress guard (`forbidigo` rule; PostgreSQL goes through the guard too)
 - [ ] Fuzzing for the request parser and detectors. *Detectors with content inspection (M2); parsers right after*

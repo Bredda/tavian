@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -38,7 +39,33 @@ func newFixture(t *testing.T, maxBody int64) *fixture {
 // newFixtureSink lets a test wrap the in-memory sink, e.g. to refuse requests.
 func newFixtureSink(t *testing.T, maxBody int64, wrap func(*meter.MemorySink) meter.Sink, opts ...func(*Deps)) *fixture {
 	t.Helper()
-	llm := httptest.NewServer(mockllm.Handler())
+	return buildFixture(t, fixtureSpec{maxBody: maxBody, wrap: wrap, deps: opts})
+}
+
+// fixtureSpec describes a gateway under test; zero values mean defaults.
+type fixtureSpec struct {
+	maxBody     int64
+	maxInflight int          // 0: the default
+	backend     http.Handler // nil: the mock backend
+	wrap        func(*meter.MemorySink) meter.Sink
+	deps        []func(*Deps)
+}
+
+func inflightLimit(n int) int {
+	if n == 0 {
+		return 256
+	}
+	return n
+}
+
+func buildFixture(t *testing.T, spec fixtureSpec) *fixture {
+	t.Helper()
+	maxBody, wrap, opts := spec.maxBody, spec.wrap, spec.deps
+	backend := spec.backend
+	if backend == nil {
+		backend = mockllm.Handler()
+	}
+	llm := httptest.NewServer(backend)
 	t.Cleanup(llm.Close)
 
 	key, keyHash, err := auth.GenerateKey()
@@ -51,6 +78,7 @@ func newFixtureSink(t *testing.T, maxBody int64, wrap func(*meter.MemorySink) me
 profile: air-gapped
 limits:
   max_request_bytes: %d
+  max_inflight: %d
 backends:
   - id: local
     type: openai
@@ -78,7 +106,7 @@ api_keys:
     team: research
     application: demo
     allowed_models: ["other-*"]
-`, maxBody, llm.URL, keyHash, narrowHash)
+`, maxBody, inflightLimit(spec.maxInflight), llm.URL, keyHash, narrowHash)
 
 	cfg, err := config.Parse([]byte(yaml))
 	if err != nil {
@@ -553,4 +581,114 @@ func TestUsageEventForAnOIDCIdentity(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status for a model outside the mapped access = %d, want 403", resp.StatusCode)
 	}
+}
+
+// blockingBackend holds every chat request until release is closed, so tests
+// can keep requests in flight.
+func blockingBackend(release <-chan struct{}, started chan<- struct{}) http.Handler {
+	inner := mockllm.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			started <- struct{}{}
+			<-release
+		}
+		inner.ServeHTTP(w, r)
+	})
+}
+
+func TestInflightCapRefusesWithRetryAfterAndRecovers(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 8)
+	f := buildFixture(t, fixtureSpec{maxBody: 1 << 20, maxInflight: 2, backend: blockingBackend(release, started)})
+	const body = `{"model":"llama-70b","messages":[{"role":"user","content":"hold"}]}`
+
+	var wg sync.WaitGroup
+	statuses := make(chan int, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp := f.post(t, f.key, body)
+			resp.Body.Close()
+			statuses <- resp.StatusCode
+		}()
+	}
+	<-started
+	<-started // both are inside the backend: the gateway is at its cap
+
+	// The third request is refused at once, even before authentication...
+	for _, key := range []string{f.key, "", "tav_wrong"} {
+		resp := f.post(t, key, body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+			t.Fatalf("key %q: status %d, Retry-After %q; want 503 with Retry-After", key, resp.StatusCode, resp.Header.Get("Retry-After"))
+		}
+	}
+	// ...and says so in the OpenAI error format.
+	resp := f.post(t, f.key, body)
+	if got := errorCode(t, resp); got != "server_busy" {
+		t.Errorf("error code = %q, want server_busy", got)
+	}
+	resp.Body.Close()
+	if n := len(f.sink.Events()); n != 0 {
+		t.Errorf("refused or still-running requests produced %d events", n)
+	}
+
+	close(release)
+	wg.Wait()
+	close(statuses)
+	for st := range statuses {
+		if st != http.StatusOK {
+			t.Errorf("a request already in flight finished with %d", st)
+		}
+	}
+	// Capacity comes back once they are done.
+	if resp := f.post(t, f.key, body); resp.StatusCode != http.StatusOK {
+		t.Errorf("after recovery: status %d", resp.StatusCode)
+	}
+}
+
+func TestInflightGaugeAndOutcomeMetric(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 4)
+	f := buildFixture(t, fixtureSpec{maxBody: 1 << 20, maxInflight: 1, backend: blockingBackend(release, started)})
+	const body = `{"model":"llama-70b","messages":[{"role":"user","content":"hold"}]}`
+
+	done := make(chan struct{})
+	go func() {
+		resp := f.post(t, f.key, body)
+		resp.Body.Close()
+		close(done)
+	}()
+	<-started
+	f.post(t, f.key, body).Body.Close() // refused
+
+	metrics := func() string {
+		resp, err := http.Get(f.admin.URL + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	m := metrics()
+	if !strings.Contains(m, "tavian_inflight_requests 1") {
+		t.Errorf("gauge not 1 while a request is held:\n%s", grepLines(m, "tavian_inflight"))
+	}
+	if !strings.Contains(m, `tavian_requests_total{outcome="overloaded",route="chat_completions"} 1`) {
+		t.Errorf("overloaded outcome not counted:\n%s", grepLines(m, "tavian_requests_total"))
+	}
+	close(release)
+	<-done
+}
+
+func grepLines(s, sub string) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, sub) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
