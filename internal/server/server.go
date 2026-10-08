@@ -25,6 +25,7 @@ import (
 	"github.com/bredda/tavian/internal/ids"
 	"github.com/bredda/tavian/internal/inspect"
 	"github.com/bredda/tavian/internal/meter"
+	"github.com/bredda/tavian/internal/pipeline"
 	"github.com/bredda/tavian/internal/policy"
 	"github.com/bredda/tavian/internal/provider/openai"
 	"github.com/bredda/tavian/internal/router"
@@ -45,7 +46,7 @@ type Deps struct {
 }
 
 // RouteFunc is the signature of router.Resolve.
-type RouteFunc func(*config.Snapshot, string, policy.Constraints) (router.Route, []router.Candidate, error)
+type RouteFunc = pipeline.RouteFunc
 
 type ctxKey struct{}
 
@@ -143,6 +144,7 @@ type call struct {
 	decision   *policy.Decision
 	matched    []string // policy rules and policies that acted
 	redactions map[string]int
+	shadow     *audit.Shadow
 	candidates []router.Candidate
 }
 
@@ -171,6 +173,7 @@ func (c *call) record(ctx context.Context, outcome string, reason audit.Reason, 
 	}
 	rec.RulesMatched = c.matched
 	rec.Redactions = c.redactions
+	rec.Shadow = c.shadow
 	if c.decision != nil {
 		rec.Label = string(c.decision.Label)
 		rec.LabelSources = &audit.LabelSources{
@@ -252,13 +255,15 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 
 	// authorize: the credentials must grant the model, and so must the policies
 	// (before inspection, so that a refused model costs no inspection time)
-	pid := policyIdentity(id)
-	if !id.CanUseModel(model) {
-		return s.refuse(ctx, w, c, audit.ModelNotAllowed, "you may not use the requested model", "denied_model")
+	caller := pipeline.Caller{Identity: policyIdentity(id), Grants: id.AllowedModels, Clearance: id.MaxClassification}
+	refusal, shadowModel := pipeline.AuthorizeModel(snap, caller, model)
+	if refusal != nil {
+		c.matched = append(c.matched, refusal.Matched...)
+		return s.refuse(ctx, w, c, refusal.Reason, refusal.Message, refusal.Outcome)
 	}
-	if v := snap.Policy.AuthorizeModel(pid, model); !v.Allowed {
-		c.matched = append(c.matched, v.Policy+"/models")
-		return s.refuse(ctx, w, c, audit.ModelNotAllowed, "you may not use the requested model", "denied_model")
+	if shadowModel != nil {
+		c.shadow = &audit.Shadow{Policies: []string{shadowModel.Policy}, WouldDenyModel: shadowModel.Policy}
+		s.Metrics.shadow.WithLabelValues("model").Inc()
 	}
 
 	// inspect (fail closed: a request that cannot be inspected is not served)
@@ -282,37 +287,35 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return s.refuse(ctx, w, c, reason, msg, "inspection_blocked")
 	}
 
-	// policy phase A: the label is the most sensitive of what the caller
-	// declared, the default and what the rules infer from the findings; it must
-	// fit the caller's clearance, and it fixes where the request may go.
+	// policies, clearance, routing and phase B: the same code `tavian policy
+	// test` runs
 	declared, err := policy.ParseDeclared(r.Header.Values(policy.DeclaredHeader))
 	if err != nil {
 		return s.refuse(ctx, w, c, audit.InvalidRequest, "invalid "+policy.DeclaredHeader+" header: expected one of public, internal, confidential, restricted", "invalid_request")
 	}
-	decision, err := snap.Policy.Decide(policy.Input{
-		Identity: pid,
+	verdict := pipeline.Evaluate(snap, s.Route, caller, policy.Input{
+		Identity: caller.Identity,
 		Request:  policy.Request{Model: model, Stream: peeked.Stream, MaxTokens: peeked.MaxTokens, HasTools: peeked.HasTools},
 		Declared: declared,
 		Kinds:    inspection.Kinds,
 	})
-	if err != nil {
-		s.Log.ErrorContext(ctx, "policy evaluation failed", "error", err)
-		return s.refuse(ctx, w, c, audit.PolicyError, "the request could not be evaluated against the policies", "policy_error")
+	c.candidates = verdict.Candidates
+	if verdict.Decided {
+		decision := verdict.Decision
+		c.decision = &decision
+		c.matched = append(c.matched, decision.Matched...)
+		c.shadow = mergeShadow(c.shadow, decision.Shadow)
+		s.Metrics.observeLabel(decision.Label)
+		s.Metrics.observeActions(decision)
+		s.Metrics.observeShadow(decision.Shadow)
 	}
-	c.decision = &decision
-	c.matched = append(c.matched, decision.Matched...)
-	s.Metrics.observeLabel(decision.Label)
-	s.Metrics.observeActions(decision)
-	if decision.Block != nil {
-		reason := audit.PolicyBlocked
-		reason.Code = decision.Block.Reason // the rule's own code, for the record
-		return s.refuse(ctx, w, c, reason, "the request was blocked by policy ("+decision.Block.Reason+")", "policy_blocked")
+	if verdict.Err != nil {
+		s.Log.ErrorContext(ctx, "the decision could not be completed", "outcome", verdict.Refusal.Outcome, "error", verdict.Err)
 	}
-	if decision.Label.Rank() > id.MaxClassification.Rank() {
-		return s.refuse(ctx, w, c, audit.ClearanceExceeded,
-			"this request is classified "+string(decision.Label)+", above the "+string(id.MaxClassification)+" your credentials are cleared to send", "clearance_exceeded")
+	if verdict.Refusal != nil {
+		return s.refuse(ctx, w, c, verdict.Refusal.Reason, verdict.Refusal.Message, verdict.Refusal.Outcome)
 	}
-	constraints := decision.Constraints
+	decision, route := verdict.Decision, verdict.Route
 
 	// redact: replace what the policy says must not be sent, then check that
 	// the result no longer holds it. The label stays that of the original
@@ -325,34 +328,11 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		}
 		body = redacted
 	}
-
-	// route, among the backends of the model that the constraints allow
-	resolve := s.Route
-	if resolve == nil {
-		resolve = router.Resolve
-	}
-	route, candidates, err := resolve(snap, model, constraints)
-	c.candidates = candidates
-	switch {
-	case errors.Is(err, router.ErrUnknownModel):
-		return s.refuse(ctx, w, c, audit.ModelNotFound, "the requested model does not exist", "model_not_found")
-	case errors.Is(err, router.ErrNoEligibleBackend):
-		return s.refuse(ctx, w, c, audit.NoEligibleBackend,
-			"no backend serving this model may receive a request classified "+string(decision.Label), "no_eligible_backend")
-	case err != nil:
-		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_error")
-	}
 	upstreamBody, err := openai.RewriteChat(body, route.UpstreamModel)
 	if err != nil {
 		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
 
-	// policy phase B: defence in depth, the chosen backend must satisfy the
-	// constraints whatever routing did.
-	if err := snap.Policy.Assert(pid, decision, policy.Backend{ID: route.Backend.ID, Class: route.Backend.DestinationClass, Max: route.Backend.MaxClassification}); err != nil {
-		s.Log.ErrorContext(ctx, "routing violated the policy constraints", "error", err)
-		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_assertion_failed")
-	}
 	// TODO(M2): quota reserve (tpm / budget) using the backend's price.
 
 	// call provider and relay the response
@@ -627,4 +607,38 @@ func (s *server) redact(ctx context.Context, snap *config.Snapshot, raw []byte, 
 	}
 	c.redactions = r.Counts
 	return out, audit.Reason{}, ""
+}
+
+// mergeShadow folds the shadow outcome of the decision into what the model
+// authorization already noted, into the form the record keeps.
+func mergeShadow(have *audit.Shadow, sh *policy.Shadow) *audit.Shadow {
+	if sh == nil {
+		return have
+	}
+	if have == nil {
+		have = &audit.Shadow{}
+	}
+	for _, p := range sh.Policies {
+		if !slices.Contains(have.Policies, p) {
+			have.Policies = append(have.Policies, p)
+		}
+	}
+	have.RulesMatched = sh.Matched
+	if sh.WouldBlock != nil {
+		have.WouldRefuse = sh.WouldBlock.Reason
+	}
+	have.Label = string(sh.Label)
+	have.ExceedsClearance = sh.ExceedsClearance
+	if sh.ClassesChanged {
+		names := make([]string, len(sh.Classes))
+		for i, c := range sh.Classes {
+			names[i] = string(c)
+		}
+		have.Constraints = &names
+	}
+	for _, k := range sh.WouldRedact {
+		have.WouldRedact = append(have.WouldRedact, string(k.Type)+"."+k.Subtype)
+	}
+	have.Error = sh.Error
+	return have
 }

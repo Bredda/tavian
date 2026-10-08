@@ -314,7 +314,6 @@ func TestInvalidPolicies(t *testing.T) {
 		"no scope":              {head + "metadata: { name: x }\nspec: {}", "scope is required"},
 		"org with team":         {head + "metadata: { name: x }\nspec: { scope: { organization: true, team: a } }", "cannot be combined"},
 		"user scope":            {head + "metadata: { name: x }\nspec: { scope: { user: bob } }", "scope.user is not supported yet"},
-		"shadow mode":           {head + "metadata: { name: x, mode: shadow }\nspec: { scope: { organization: true } }", "shadow is not supported yet"},
 		"unknown mode":          {head + "metadata: { name: x, mode: loud }\nspec: { scope: { organization: true } }", "mode must be"},
 		"quotas":                {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [] }", "spec.quotas is not supported yet"},
 		"audit":                 {head + "metadata: { name: x }\nspec: { scope: { organization: true }, audit: { content: hash } }", "spec.audit is not supported yet"},
@@ -681,5 +680,148 @@ spec:
 	_, err := e.Decide(Input{Kinds: []inspect.Kind{{Type: "t", Subtype: "s", Count: 1}}})
 	if err == nil || !strings.Contains(err.Error(), "x/div") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func shadowDoc(rest string) string {
+	return "apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: trial, mode: shadow }\nspec:\n  scope: { organization: true }\n" + rest
+}
+
+func TestShadowPoliciesAreEvaluatedButNeverEnforced(t *testing.T) {
+	email := kind("pii", "email")
+	for name, c := range map[string]struct {
+		doc   string
+		check func(t *testing.T, d Decision)
+	}{
+		"block": {`  inspection: { request: { on_finding: [ { id: nope, when: 'finding.subtype == "email"', action: block, reason: NO_EMAILS } ] } }
+`, func(t *testing.T, d Decision) {
+			if d.Block != nil {
+				t.Error("a shadow block was enforced")
+			}
+			if sh := d.Shadow; sh.WouldBlock == nil || sh.WouldBlock.Reason != "NO_EMAILS" || sh.WouldBlock.Rule != "trial/nope" || !sh.Differs() {
+				t.Errorf("shadow = %+v", sh)
+			}
+		}},
+		"label": {`  classification: { default: confidential }
+`, func(t *testing.T, d Decision) {
+			if d.Label != taxonomy.Internal {
+				t.Errorf("a shadow default label was enforced: %s", d.Label)
+			}
+			if d.Shadow.Label != taxonomy.Confidential || !d.Shadow.ClassesChanged || len(d.Shadow.Classes) != 1 {
+				t.Errorf("shadow = %+v", d.Shadow)
+			}
+		}},
+		"destinations": {`  destinations: { internal: [internal] }
+`, func(t *testing.T, d Decision) {
+			if len(d.Constraints.Classes) != 2 {
+				t.Errorf("shadow destinations were enforced: %v", d.Constraints.Classes)
+			}
+			if !d.Shadow.ClassesChanged || len(d.Shadow.Classes) != 1 || d.Shadow.Label != "" {
+				t.Errorf("shadow = %+v", d.Shadow)
+			}
+		}},
+		"redact": {`  inspection: { request: { on_finding: [ { id: mask, when: 'finding.subtype == "email"', action: redact } ] } }
+`, func(t *testing.T, d Decision) {
+			if len(d.Redact) != 0 {
+				t.Error("a shadow redaction was enforced")
+			}
+			if len(d.Shadow.WouldRedact) != 1 || d.Shadow.WouldRedact[0].Subtype != "email" || len(d.Shadow.Matched) != 1 {
+				t.Errorf("shadow = %+v", d.Shadow)
+			}
+		}},
+		"nothing different": {`  inspection: { request: { on_finding: [ { id: x, when: 'finding.subtype == "ipv4"', action: flag } ] } }
+`, func(t *testing.T, d Decision) {
+			if d.Shadow == nil || d.Shadow.Differs() || len(d.Shadow.Policies) != 1 {
+				t.Errorf("shadow = %+v", d.Shadow)
+			}
+		}},
+	} {
+		e := compile(t, shadowDoc(c.doc))
+		d := decide(t, e, Identity{}, "", email)
+		if d.Shadow == nil {
+			t.Errorf("%s: no shadow outcome", name)
+			continue
+		}
+		c.check(t, d)
+		// the decision in force is exactly what it is without the shadow policy
+		plain := decide(t, compile(t), Identity{}, "", email)
+		if d.Label != plain.Label || len(d.Constraints.Classes) != len(plain.Constraints.Classes) || d.Block != nil || len(d.Redact) != 0 || len(d.Matched) != len(plain.Matched) {
+			t.Errorf("%s: the shadow policy changed the decision: %+v vs %+v", name, d, plain)
+		}
+	}
+}
+
+func TestShadowOnlyAppliesToItsScope(t *testing.T) {
+	e := compile(t, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: trial, mode: shadow }
+spec:
+  scope: { team: finance }
+  classification: { default: restricted }
+`)
+	if d := decide(t, e, Identity{Team: "research"}, ""); d.Shadow != nil {
+		t.Errorf("research has no shadow policy: %+v", d.Shadow)
+	}
+	if d := decide(t, e, Identity{Team: "finance"}, ""); d.Shadow == nil || d.Shadow.Label != taxonomy.Restricted {
+		t.Errorf("finance: %+v", d.Shadow)
+	}
+	if got := strings.Join(e.ShadowNames(), ","); got != "trial" {
+		t.Errorf("shadow names = %q", got)
+	}
+}
+
+// A shadow policy that breaks must not break the request: the failure is
+// reported in the shadow outcome.
+func TestShadowFailureDoesNotFailTheDecision(t *testing.T) {
+	e := compile(t, shadowDoc(`  inspection: { request: { on_finding: [ { id: div, when: 'finding.count == 0 || 10 / (finding.count - 1) == 1', action: flag } ] } }
+`))
+	d, err := e.Decide(Input{Kinds: []inspect.Kind{{Type: "t", Subtype: "s", Count: 1}}})
+	if err != nil {
+		t.Fatalf("a shadow policy failed the request: %v", err)
+	}
+	if d.Shadow == nil || !strings.Contains(d.Shadow.Error, "trial/div") || !d.Shadow.Differs() {
+		t.Errorf("shadow = %+v", d.Shadow)
+	}
+}
+
+func TestShadowModelAuthorization(t *testing.T) {
+	e := compile(t, shadowDoc(`  models: { deny: ["gpt-*"] }
+`))
+	v := e.AuthorizeModel(Identity{}, "gpt-4")
+	if !v.Allowed || v.Shadow == nil || v.Shadow.Policy != "trial" {
+		t.Errorf("verdict = %+v: the model is allowed, and the shadow policy would have refused it", v)
+	}
+	if v := e.AuthorizeModel(Identity{}, "llama"); !v.Allowed || v.Shadow != nil {
+		t.Errorf("verdict = %+v", v)
+	}
+	// an enforced refusal is still a refusal
+	e = compile(t, shadowDoc(`  models: { deny: ["gpt-*"] }
+`), `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: real }
+spec: { scope: { organization: true }, models: { deny: ["gpt-*"] } }
+`)
+	if v := e.AuthorizeModel(Identity{}, "gpt-4"); v.Allowed || v.Policy != "real" {
+		t.Errorf("verdict = %+v", v)
+	}
+}
+
+func TestExplicitEnforceModeAndPhaseBIgnoreShadow(t *testing.T) {
+	e := compile(t, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: strict, mode: enforce }
+spec: { scope: { organization: true }, classification: { default: confidential } }
+`, shadowDoc(`  destinations: { confidential: [] }
+`))
+	d := decide(t, e, Identity{}, "")
+	if d.Label != taxonomy.Confidential || d.Shadow == nil || !d.Shadow.ClassesChanged || len(d.Shadow.Classes) != 0 {
+		t.Fatalf("decision = %+v shadow %+v", d, d.Shadow)
+	}
+	// phase B uses the policies in force only: an internal backend is fine
+	if err := e.Assert(Identity{}, d, Backend{ID: "local", Class: taxonomy.ClassInternal, Max: taxonomy.Restricted}); err != nil {
+		t.Errorf("a shadow policy leaked into phase B: %v", err)
 	}
 }

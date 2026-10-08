@@ -50,6 +50,8 @@ type policy struct {
 	name   string
 	source string
 	scope  Scope
+	// shadow policies are evaluated and compared, never enforced.
+	shadow bool
 
 	modelsAllow, modelsDeny []string
 	// destinations maps a label to the classes this policy allows for it; a
@@ -151,7 +153,7 @@ func Compile(sources []Source) (*Engine, error) {
 func compilePolicy(inferEnv, actionEnv *cel.Env, d Document, where, source string) (*policy, []error) {
 	var errs []error
 	p := &policy{
-		name: d.Metadata.Name, source: source, scope: d.Spec.Scope,
+		name: d.Metadata.Name, source: source, scope: d.Spec.Scope, shadow: d.Metadata.Mode == "shadow",
 		modelsAllow: d.Spec.Models.Allow, modelsDeny: d.Spec.Models.Deny,
 		defaultLabel: d.Spec.Classification.Default,
 	}
@@ -253,36 +255,77 @@ func (p *policy) applies(id Identity) bool {
 	return (p.scope.Team == "" || p.scope.Team == id.Team) && (p.scope.Application == "" || p.scope.Application == id.Application)
 }
 
-func (e *Engine) applicable(id Identity) []*policy {
+// applicable lists the policies that apply to the caller: the ones in force,
+// and with withShadow also the ones in shadow mode.
+func (e *Engine) applicable(id Identity, withShadow bool) []*policy {
 	var out []*policy
 	for _, p := range e.policies {
-		if p.applies(id) {
+		if p.applies(id) && (withShadow || !p.shadow) {
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
+func hasShadow(ps []*policy) bool {
+	for _, p := range ps {
+		if p.shadow {
+			return true
+		}
+	}
+	return false
+}
+
+func shadowNames(ps []*policy) []string {
+	var out []string
+	for _, p := range ps {
+		if p.shadow {
+			out = append(out, p.name)
+		}
+	}
+	return out
+}
+
+// ShadowNames lists the policies in shadow mode.
+func (e *Engine) ShadowNames() []string { return shadowNames(e.policies) }
+
 // Verdict is the answer of a model authorization.
 type Verdict struct {
 	Allowed bool
 	// Policy names the policy that refused, when Allowed is false.
 	Policy string
+	// Shadow is set when the model is allowed but a policy in shadow mode would
+	// have refused it.
+	Shadow *ShadowModel
 }
+
+// ShadowModel says which policy in shadow mode would have refused a model.
+type ShadowModel struct{ Policy string }
 
 // AuthorizeModel says whether the policies let this caller use the model. A
 // deny anywhere wins; where a policy has an allow list, the model must be in
 // it. This comes on top of the models the caller's credentials grant.
 func (e *Engine) AuthorizeModel(id Identity, model string) Verdict {
-	for _, p := range e.applicable(id) {
+	if name := firstModelRefusal(e.applicable(id, false), model); name != "" {
+		return Verdict{Policy: name}
+	}
+	v := Verdict{Allowed: true}
+	if name := firstModelRefusal(e.applicable(id, true), model); name != "" {
+		v.Shadow = &ShadowModel{Policy: name}
+	}
+	return v
+}
+
+func firstModelRefusal(ps []*policy, model string) string {
+	for _, p := range ps {
 		if glob.MatchAny(p.modelsDeny, model) {
-			return Verdict{Policy: p.name}
+			return p.name
 		}
 		if len(p.modelsAllow) > 0 && !glob.MatchAny(p.modelsAllow, model) {
-			return Verdict{Policy: p.name}
+			return p.name
 		}
 	}
-	return Verdict{Allowed: true}
+	return ""
 }
 
 // LabelSources says where the label of a request comes from. Empty means the
@@ -332,6 +375,10 @@ type Decision struct {
 	Redact []RedactKind
 	// Flagged lists the flag rules that fired: recorded, nothing more.
 	Flagged []string
+	// Shadow is set when policies in shadow mode apply to the caller; see
+	// Shadow.Differs for whether they would have changed anything.
+	Shadow *Shadow
+
 	// Restricted is what restrict_destinations rules left of the destination
 	// classes: nil if no such rule applied, and an empty non-nil slice if they
 	// left none. Constraints already reflect it.
@@ -344,8 +391,19 @@ type Decision struct {
 // it below what inspection infers. An error means a condition could not be
 // evaluated: the caller must refuse the request.
 func (e *Engine) Decide(in Input) (Decision, error) {
-	ps := e.applicable(in.Identity)
+	d, err := e.decide(e.applicable(in.Identity, false), in)
+	if err != nil {
+		return Decision{}, err
+	}
+	// Policies in shadow mode are evaluated on the side. They can never change
+	// the decision, and a failure in one must not fail the request.
+	if all := e.applicable(in.Identity, true); hasShadow(all) {
+		d.Shadow = shadowOf(d, all, in, e)
+	}
+	return d, nil
+}
 
+func (e *Engine) decide(ps []*policy, in Input) (Decision, error) {
 	def := taxonomy.Internal
 	for _, p := range ps {
 		def = taxonomy.Max(def, p.defaultLabel)
@@ -540,7 +598,7 @@ func (c Constraints) Excludes(class taxonomy.Class, max taxonomy.Label) string {
 // constraints are passed to it, cannot send data where it must not go. A
 // non-nil error means exactly such a bug.
 func (e *Engine) Assert(id Identity, d Decision, b Backend) error {
-	classes := classesFor(e.applicable(id), d.Label)
+	classes := classesFor(e.applicable(id, false), d.Label)
 	if d.Restricted != nil {
 		restricted := map[taxonomy.Class]bool{}
 		for _, c := range d.Restricted {
@@ -561,4 +619,64 @@ type Backend struct {
 	ID    string
 	Class taxonomy.Class
 	Max   taxonomy.Label
+}
+
+// Shadow is what policies in shadow mode would have changed.
+type Shadow struct {
+	// Policies are the shadow policies that apply to the caller.
+	Policies []string
+	// Matched are the rules of those policies that fired.
+	Matched []string
+	// WouldBlock is set when a shadow rule would have refused a request that
+	// the policies in force let through.
+	WouldBlock *Block
+	// Label is the label the request would have had, when it differs.
+	Label taxonomy.Label
+	// ClassesChanged says that the destination classes would differ; Classes
+	// are the ones that would have applied.
+	ClassesChanged bool
+	Classes        []taxonomy.Class
+	// WouldRedact are kinds that would have been redacted beyond the ones that were.
+	WouldRedact []RedactKind
+	// ExceedsClearance is set by the pipeline when the label the request would
+	// have had is above the caller's clearance and the real one is not.
+	ExceedsClearance bool
+	// Error is set when the shadow evaluation itself failed.
+	Error string
+}
+
+// Differs says whether the shadow policies would have changed the outcome.
+func (s *Shadow) Differs() bool {
+	return s != nil && (s.WouldBlock != nil || s.Label != "" || s.ClassesChanged || len(s.WouldRedact) > 0 || s.ExceedsClearance || s.Error != "")
+}
+
+// shadowOf evaluates the request with the shadow policies added and reports
+// what differs from the decision actually taken.
+func shadowOf(enforced Decision, all []*policy, in Input, e *Engine) *Shadow {
+	sh := &Shadow{Policies: shadowNames(all)}
+	full, err := e.decide(all, in)
+	if err != nil {
+		sh.Error = err.Error()
+		return sh
+	}
+	for _, m := range full.Matched {
+		if !slices.Contains(enforced.Matched, m) {
+			sh.Matched = append(sh.Matched, m)
+		}
+	}
+	if enforced.Block == nil && full.Block != nil {
+		sh.WouldBlock = full.Block
+	}
+	if full.Label != enforced.Label {
+		sh.Label = full.Label
+	}
+	if !slices.Equal(full.Constraints.Classes, enforced.Constraints.Classes) {
+		sh.ClassesChanged, sh.Classes = true, full.Constraints.Classes
+	}
+	for _, k := range full.Redact {
+		if !slices.Contains(enforced.Redact, k) {
+			sh.WouldRedact = append(sh.WouldRedact, k)
+		}
+	}
+	return sh
 }

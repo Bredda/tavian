@@ -41,6 +41,24 @@ type Candidate struct {
 	Excluded string `json:"excluded,omitempty"`
 }
 
+// Shadow is what policies in shadow mode would have changed. It is recorded
+// only when they apply to the request; the policies in force decided.
+type Shadow struct {
+	Policies     []string `json:"policies"`
+	RulesMatched []string `json:"rules_matched,omitempty"`
+	// WouldRefuse is the reason code of a block that would have refused the
+	// request, and WouldDenyModel the policy that would have refused the model.
+	WouldRefuse      string `json:"would_refuse,omitempty"`
+	WouldDenyModel   string `json:"would_deny_model,omitempty"`
+	Label            string `json:"label,omitempty"`
+	ExceedsClearance bool   `json:"exceeds_clearance,omitempty"`
+	// Constraints are the destination classes that would have applied, when
+	// they differ (an empty list means none).
+	Constraints *[]string `json:"constraints,omitempty"`
+	WouldRedact []string  `json:"would_redact,omitempty"`
+	Error       string    `json:"error,omitempty"`
+}
+
 // DecisionRecord is written once for every authenticated chat request, refused
 // ones included. Requests refused before the caller is known (bad
 // credentials, overload) leave metrics and logs only: recording them would let
@@ -79,6 +97,8 @@ type DecisionRecord struct {
 	RulesMatched []string `json:"rules_matched,omitempty"`
 	// Redactions counts the spans replaced by placeholders, per "type.subtype".
 	Redactions map[string]int `json:"redactions,omitempty"`
+	// Shadow is what policies in shadow mode would have changed.
+	Shadow *Shadow `json:"shadow,omitempty"`
 
 	Outcome    string `json:"outcome"`
 	ReasonCode string `json:"reason_code"`

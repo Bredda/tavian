@@ -24,6 +24,7 @@ type Metrics struct {
 
 	labels      *prometheus.CounterVec
 	actions     *prometheus.CounterVec
+	shadow      *prometheus.CounterVec
 	inspections *prometheus.CounterVec
 	findings    *prometheus.CounterVec
 	inspectTime prometheus.Histogram
@@ -57,6 +58,10 @@ func NewMetrics() *Metrics {
 			Name: "tavian_policy_actions_total",
 			Help: "Requests on which a policy action applied, by action (block|restrict_destinations|redact|flag).",
 		}, []string{"action"}),
+		shadow: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_policy_shadow_total",
+			Help: "Requests on which policies in shadow mode would have changed the outcome, by what they would have changed (model|block|label|destinations|redact|clearance|error). Nothing was enforced.",
+		}, []string{"change"}),
 		inspections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "tavian_inspections_total",
 			Help: "Request inspections, by status (ok|skipped|failed).",
@@ -79,7 +84,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
-		m.inspections, m.findings, m.inspectTime, m.labels, m.actions,
+		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow,
 	)
 	return m
 }
@@ -198,5 +203,20 @@ func (m *Metrics) observeActions(d policy.Decision) {
 	}
 	if len(d.Flagged) > 0 {
 		m.actions.WithLabelValues(policy.ActionFlag).Inc()
+	}
+}
+
+// observeShadow counts what policies in shadow mode would have changed.
+func (m *Metrics) observeShadow(sh *policy.Shadow) {
+	if sh == nil {
+		return
+	}
+	for change, hit := range map[string]bool{
+		"block": sh.WouldBlock != nil, "label": sh.Label != "", "destinations": sh.ClassesChanged,
+		"redact": len(sh.WouldRedact) > 0, "clearance": sh.ExceedsClearance, "error": sh.Error != "",
+	} {
+		if hit {
+			m.shadow.WithLabelValues(change).Inc()
+		}
 	}
 }

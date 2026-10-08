@@ -192,7 +192,9 @@ func (d *Document) validate(where string, baseline bool) []error {
 	switch d.Metadata.Mode {
 	case "", "enforce":
 	case "shadow":
-		addf("metadata.mode: shadow is not supported yet")
+		if baseline {
+			addf("the built-in policy cannot be in shadow mode")
+		}
 	default:
 		addf("metadata.mode must be enforce or shadow (got %q)", d.Metadata.Mode)
 	}
