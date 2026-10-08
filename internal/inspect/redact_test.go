@@ -70,7 +70,7 @@ func TestRedactMergesOverlapsAndKeepsOtherText(t *testing.T) {
 
 func TestRedactUsesTheNormalizedText(t *testing.T) {
 	e := newTestEngine(t)
-	req := text("write to al​ice@exa​mple.org now")
+	req := text("write to al\u200bice@exa\u200bmple.org now")
 	r := redactWith(t, e, req, "pii.email")
 	if got := r.Replacements[0]; got != "write to [EMAIL_1] now" {
 		t.Errorf("got %q", got)

@@ -530,6 +530,16 @@ func TestExamplePoliciesCompile(t *testing.T) {
 	if v := e.AuthorizeModel(fin, "gpt-4"); v.Allowed {
 		t.Error("finance may only use llama-* and mistral-*")
 	}
+	// the actions of the examples
+	if d := decide(t, e, Identity{Team: "research"}, "", kind("secret", "jwt")); d.Block == nil || d.Block.Reason != "SECRET_IN_PROMPT" {
+		t.Errorf("secrets must be blocked for everyone: %+v", d.Block)
+	}
+	if d := decide(t, e, fin, "", kind("pii", "email")); len(d.Redact) != 1 {
+		t.Errorf("e-mails must be redacted: %+v", d.Redact)
+	}
+	if d := decide(t, e, fin, "", kind("pii", "phone")); len(d.Flagged) != 1 {
+		t.Errorf("phones must be flagged for finance: %+v", d.Flagged)
+	}
 }
 
 const actionsPolicy = `

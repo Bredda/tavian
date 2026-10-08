@@ -72,7 +72,7 @@ The matched text is not stored in findings. Fingerprints use a keyed hash so ide
 
 ### Actions
 
-Policy maps findings and conditions to actions (see [POLICY.md](POLICY.md)):
+*In main after v0.1.0:* policies map findings to actions as described in [POLICY.md](POLICY.md#actions-on-findings): `block`, `restrict_destinations`, `redact` (with verification of the result), `flag` and `allow`. Policy maps findings and conditions to actions:
 
 `allow` · `flag` (record only) · `redact` (replace with typed placeholders such as `[IBAN_1]`) · `restrict_destinations` · `block`.
 
@@ -137,7 +137,7 @@ Always, for every request (including refused ones): the `DecisionRecord` — ide
 | Outcome | Reason codes |
 |---|---|
 | `served` | `SERVED` |
-| `refused` | `INVALID_REQUEST`, `REQUEST_TOO_LARGE`, `MODEL_NOT_ALLOWED`, `CLEARANCE_EXCEEDED`, `MODEL_NOT_FOUND`, `NO_ELIGIBLE_BACKEND`, `ROUTING_ASSERTION_FAILED`, `MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`, `UPSTREAM_UNAVAILABLE` |
+| `refused` | `INVALID_REQUEST`, `REQUEST_TOO_LARGE`, `MODEL_NOT_ALLOWED`, `CLEARANCE_EXCEEDED`, `MODEL_NOT_FOUND`, `NO_ELIGIBLE_BACKEND`, `ROUTING_ASSERTION_FAILED`, `POLICY_ERROR`, `POLICY_BLOCKED` (or the `reason` of the block rule), `REDACTION_INCOMPLETE`, `REDACTION_FAILED`, `MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`, `UPSTREAM_UNAVAILABLE` |
 | `failed` | `UPSTREAM_ERROR` (the backend answered with an error status), `STREAM_INTERRUPTED`, `CLIENT_DISCONNECTED` |
 
 Reason codes are stable; the OpenAI-compatible error `code` that SDKs see (`model_not_allowed`, …) is unchanged. Spooled records that cannot be read back are set aside in `events.rejected` and counted (`tavian_spool_rejected_records_total`), never dropped. The hash chain over these records is the next step ([roadmap](ROADMAP.md)).

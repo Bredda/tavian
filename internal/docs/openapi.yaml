@@ -357,7 +357,10 @@ components:
         wrong type, or an invalid `X-Tavian-Classification` header (code `invalid_request`). Also refused with 400: content the
         gateway cannot inspect, namely images, audio, files or other non-text
         content parts (`multimodal_not_inspectable`) and requests with too many
-        strings or too deep nesting (`request_too_complex`).
+        strings or too deep nesting (`request_too_complex`), and requests with
+        more sensitive values than a policy can redact (`redaction_incomplete`).
+        When a policy redacts values, Tavian replaces them with placeholders
+        such as `[IBAN_1]` before the request reaches the model.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -382,7 +385,9 @@ components:
         `no_eligible_backend`, for example a model that only exists at an
         external provider and a request containing an IBAN). The message names
         the label, never the content; the decision record says which backends
-        were considered and why each was set aside.
+        were considered and why each was set aside. A rule of the organization's
+        policies can also block a request (code `blocked_by_policy`; the message
+        gives the rule's reason code, for example `SECRET_IN_PROMPT`).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
