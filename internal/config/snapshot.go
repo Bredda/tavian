@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bredda/tavian/internal/inspect"
+	"github.com/bredda/tavian/internal/policy"
 )
 
 // Snapshot is an immutable, validated view of the configuration, identified by
@@ -31,6 +32,10 @@ type Snapshot struct {
 	DocsEnabled bool
 	// Inspector inspects request content; never nil.
 	Inspector *inspect.Engine
+	// Policy decides what may happen to a request; never nil (at least the
+	// built-in baseline). PolicySources are the files it was built from.
+	Policy        *policy.Engine
+	PolicySources []policy.Source
 
 	Backends map[string]*Backend
 	Models   map[string]*Model
@@ -84,9 +89,8 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		addf("limits.max_inflight: must be at least 1")
 	}
 
-	sum := sha256.Sum256(raw)
 	s := &Snapshot{
-		Revision:    hex.EncodeToString(sum[:])[:12],
+		Revision:    revisionOf(raw, cfg.PolicySources),
 		LoadedAt:    time.Now().UTC(),
 		Profile:     cfg.Profile,
 		Limits:      cfg.Limits,
@@ -95,6 +99,12 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		Models:      map[string]*Model{},
 		Keys:        map[string]*APIKey{},
 		Endpoints:   map[string]DestinationClass{},
+	}
+
+	if pe, err := policy.Compile(cfg.PolicySources); err != nil {
+		addf("%v", err)
+	} else {
+		s.Policy, s.PolicySources = pe, cfg.PolicySources
 	}
 
 	if eng, err := inspect.New(cfg.Inspection, getenv); err != nil {
@@ -277,3 +287,22 @@ func (h *Holder) Load() *Snapshot { return h.p.Load() }
 
 // Store publishes s.
 func (h *Holder) Store(s *Snapshot) { h.p.Store(s) }
+
+// revisionOf identifies a configuration: the hash of the configuration file
+// and, when there are any, of the policy files by name. Without policy files it
+// is the hash of the file alone, as before they existed.
+func revisionOf(raw []byte, policies []policy.Source) string {
+	h := sha256.New()
+	h.Write(raw)
+	if len(policies) > 0 {
+		sorted := append([]policy.Source(nil), policies...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		for _, p := range sorted {
+			h.Write([]byte{0})
+			h.Write([]byte(p.Name))
+			h.Write([]byte{0})
+			h.Write(p.Raw)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}

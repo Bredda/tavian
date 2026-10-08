@@ -333,7 +333,15 @@ func TestKindsSurviveTruncation(t *testing.T) {
 			t.Fatal("the IBAN should have been cut from the findings for this test to mean anything")
 		}
 	}
-	if got := strings.Join(res.Kinds, ","); got != "pii.email,pii.iban" {
+	var names []string
+	for _, k := range res.Kinds {
+		names = append(names, k.Name())
+	}
+	if got := strings.Join(names, ","); got != "pii.email,pii.iban" {
 		t.Errorf("kinds = %q, want pii.email,pii.iban", got)
+	}
+	email, iban := res.Kinds[0], res.Kinds[1]
+	if email.Count != maxFindings+10 || iban.Count != 1 || iban.Severity != SeverityHigh || email.Severity != SeverityMedium || iban.Confidence != 0.95 {
+		t.Errorf("kind stats: email %+v iban %+v", email, iban)
 	}
 }

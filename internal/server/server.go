@@ -139,7 +139,8 @@ type call struct {
 	at         time.Time
 	model      string
 	inspection *inspect.Result
-	class      *policy.Classification
+	decision   *policy.Decision
+	matched    []string // policy rules and policies that acted
 	candidates []router.Candidate
 }
 
@@ -166,13 +167,15 @@ func (c *call) record(ctx context.Context, outcome string, reason audit.Reason, 
 	for _, cand := range c.candidates {
 		rec.Candidates = append(rec.Candidates, audit.Candidate{Backend: cand.Backend, Excluded: cand.Excluded})
 	}
-	if c.class != nil {
-		rec.Label = string(c.class.Label)
+	rec.RulesMatched = c.matched
+	if c.decision != nil {
+		rec.Label = string(c.decision.Label)
 		rec.LabelSources = &audit.LabelSources{
-			Declared: string(c.class.Sources.Declared),
-			Default:  string(c.class.Sources.Default),
-			Inferred: string(c.class.Sources.Inferred),
+			Declared: string(c.decision.Sources.Declared),
+			Default:  string(c.decision.Sources.Default),
+			Inferred: string(c.decision.Sources.Inferred),
 		}
+		rec.Constraints = c.decision.Constraints.ClassNames()
 	}
 	return rec
 }
@@ -237,14 +240,21 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	}
 
 	// normalize
-	model, _, err := openai.PeekChat(raw)
+	peeked, err := openai.Peek(raw)
 	if err != nil {
 		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
+	model := peeked.Model
 	c.model = model
 
-	// authorize
+	// authorize: the credentials must grant the model, and so must the policies
+	// (before inspection, so that a refused model costs no inspection time)
+	pid := policyIdentity(id)
 	if !id.CanUseModel(model) {
+		return s.refuse(ctx, w, c, audit.ModelNotAllowed, "you may not use the requested model", "denied_model")
+	}
+	if v := snap.Policy.AuthorizeModel(pid, model); !v.Allowed {
+		c.matched = append(c.matched, v.Policy+"/models")
 		return s.refuse(ctx, w, c, audit.ModelNotAllowed, "you may not use the requested model", "denied_model")
 	}
 
@@ -269,22 +279,31 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return s.refuse(ctx, w, c, reason, msg, "inspection_blocked")
 	}
 
-	// classify: the label is the most sensitive of what the caller declared,
-	// the default and what inspection found; it must fit the caller's clearance.
+	// policy phase A: the label is the most sensitive of what the caller
+	// declared, the default and what the rules infer from the findings; it must
+	// fit the caller's clearance, and it fixes where the request may go.
 	declared, err := policy.ParseDeclared(r.Header.Values(policy.DeclaredHeader))
 	if err != nil {
 		return s.refuse(ctx, w, c, audit.InvalidRequest, "invalid "+policy.DeclaredHeader+" header: expected one of public, internal, confidential, restricted", "invalid_request")
 	}
-	class := policy.Classify(declared, inspection.Kinds)
-	c.class = &class
-	s.Metrics.observeLabel(class.Label)
-	if class.Exceeds(id.MaxClassification) {
-		return s.refuse(ctx, w, c, audit.ClearanceExceeded,
-			"this request is classified "+string(class.Label)+", above the "+string(id.MaxClassification)+" your credentials are cleared to send", "clearance_exceeded")
+	decision, err := snap.Policy.Decide(policy.Input{
+		Identity: pid,
+		Request:  policy.Request{Model: model, Stream: peeked.Stream, MaxTokens: peeked.MaxTokens, HasTools: peeked.HasTools},
+		Declared: declared,
+		Kinds:    inspection.Kinds,
+	})
+	if err != nil {
+		s.Log.ErrorContext(ctx, "policy evaluation failed", "error", err)
+		return s.refuse(ctx, w, c, audit.PolicyError, "the request could not be evaluated against the policies", "policy_error")
 	}
-
-	// policy phase A: where may a request with this label go?
-	constraints := policy.ConstraintsFor(class.Label)
+	c.decision = &decision
+	c.matched = append(c.matched, decision.Matched...)
+	s.Metrics.observeLabel(decision.Label)
+	if decision.Label.Rank() > id.MaxClassification.Rank() {
+		return s.refuse(ctx, w, c, audit.ClearanceExceeded,
+			"this request is classified "+string(decision.Label)+", above the "+string(id.MaxClassification)+" your credentials are cleared to send", "clearance_exceeded")
+	}
+	constraints := decision.Constraints
 
 	// route, among the backends of the model that the constraints allow
 	resolve := s.Route
@@ -298,7 +317,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return s.refuse(ctx, w, c, audit.ModelNotFound, "the requested model does not exist", "model_not_found")
 	case errors.Is(err, router.ErrNoEligibleBackend):
 		return s.refuse(ctx, w, c, audit.NoEligibleBackend,
-			"no backend serving this model may receive a request classified "+string(class.Label), "no_eligible_backend")
+			"no backend serving this model may receive a request classified "+string(decision.Label), "no_eligible_backend")
 	case err != nil:
 		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_error")
 	}
@@ -309,7 +328,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 
 	// policy phase B: defence in depth, the chosen backend must satisfy the
 	// constraints whatever routing did.
-	if err := policy.Assert(class.Label, route.Backend); err != nil {
+	if err := snap.Policy.Assert(pid, decision.Label, route.Backend.ID, route.Backend.DestinationClass, route.Backend.MaxClassification); err != nil {
 		s.Log.ErrorContext(ctx, "routing violated the policy constraints", "error", err)
 		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_assertion_failed")
 	}
@@ -384,8 +403,8 @@ func (s *server) event(ctx context.Context, c *call, at time.Time, outcome strin
 		sum := c.inspection.Summary()
 		ev.Inspection = &sum
 	}
-	if c.class != nil {
-		ev.Label = string(c.class.Label)
+	if c.decision != nil {
+		ev.Label = string(c.decision.Label)
 	}
 	return ev
 }
@@ -535,4 +554,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// policyIdentity is the caller as policies see it.
+func policyIdentity(id *auth.Identity) policy.Identity {
+	return policy.Identity{
+		User: id.Subject, Groups: id.Groups, Team: id.Team, Application: id.Application, AuthMethod: id.Method,
+	}
 }

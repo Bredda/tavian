@@ -33,7 +33,7 @@ func (a OIDCAuthenticator) Authenticate(r *http.Request) (*Identity, error) {
 
 	// The first matching mapping (in configuration order) names the team; the
 	// allowed models and the clearance of every matching mapping add up.
-	id := &Identity{Subject: claims.Subject, Application: claims.Application, Method: "oidc", MaxClassification: config.LabelPublic}
+	id := &Identity{Subject: claims.Subject, Groups: claims.Groups, Application: claims.Application, Method: "oidc", MaxClassification: config.LabelPublic}
 	for _, m := range s.OIDC.Mappings {
 		if !slices.Contains(claims.Groups, m.Group) {
 			continue

@@ -1,0 +1,33 @@
+# The built-in policy: what applies to every request before any policy file is
+# read. It is a policy like the ones operators write (same schema, same engine),
+# and it is the floor: policies for a team or an application can only narrow
+# what it allows, never widen it.
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata:
+  name: baseline
+  description: Built-in defaults, applied to every request
+spec:
+  scope: { organization: true }
+
+  # label -> destination classes that may receive data of that label
+  destinations:
+    public:       [internal, approved-external, public-external]
+    internal:     [internal, approved-external]
+    confidential: [internal]
+    restricted:   [internal]
+
+  classification:
+    default: internal
+    infer:
+      # Secrets never leave the organization.
+      - id: secret-is-restricted
+        when: finding.type == "secret"
+        label: restricted
+      # Identifiers of people and accounts stay on internal destinations.
+      # E-mail addresses, phone numbers, IP addresses and custom detectors do
+      # not raise the label on their own: the default label already keeps them
+      # off public destinations.
+      - id: financial-and-national-ids-are-confidential
+        when: finding.type == "pii" && finding.subtype in ["iban", "payment_card", "nir"]
+        label: confidential

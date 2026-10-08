@@ -57,19 +57,46 @@ type Client struct {
 // New returns a Client.
 func New(hc *http.Client, userAgent string) *Client { return &Client{http: hc, userAgent: userAgent} }
 
-// PeekChat extracts the routing-relevant fields of a chat completion request.
-func PeekChat(raw []byte) (model string, stream bool, err error) {
+// Peeked is what policies may look at in a chat completion request.
+type Peeked struct {
+	Model     string
+	Stream    bool
+	MaxTokens int64 // max_completion_tokens, else max_tokens, else 0
+	HasTools  bool
+}
+
+// Peek extracts the fields of a chat completion request that routing and
+// policy conditions use. Fields of an unexpected type are treated as absent:
+// the backend will refuse them, the gateway does not need to.
+func Peek(raw []byte) (Peeked, error) {
 	var p struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
+		Model     string            `json:"model"`
+		Stream    bool              `json:"stream"`
+		MaxTokens json.RawMessage   `json:"max_tokens"`
+		MaxCompl  json.RawMessage   `json:"max_completion_tokens"`
+		Tools     []json.RawMessage `json:"tools"`
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return "", false, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		return Peeked{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	if p.Model == "" {
-		return "", false, fmt.Errorf("%w: missing \"model\"", ErrInvalidRequest)
+		return Peeked{}, fmt.Errorf("%w: missing \"model\"", ErrInvalidRequest)
 	}
-	return p.Model, p.Stream, nil
+	out := Peeked{Model: p.Model, Stream: p.Stream, HasTools: len(p.Tools) > 0}
+	for _, r := range []json.RawMessage{p.MaxCompl, p.MaxTokens} {
+		var n int64
+		if json.Unmarshal(r, &n) == nil && n > 0 {
+			out.MaxTokens = n
+			break
+		}
+	}
+	return out, nil
+}
+
+// PeekChat extracts the routing-relevant fields of a chat completion request.
+func PeekChat(raw []byte) (model string, stream bool, err error) {
+	p, err := Peek(raw)
+	return p.Model, p.Stream, err
 }
 
 // RewriteChat returns the request to send upstream: the model name is replaced

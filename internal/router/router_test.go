@@ -8,6 +8,21 @@ import (
 	"github.com/bredda/tavian/internal/policy"
 )
 
+// constraintsFor gives the constraints the built-in policy sets for a request
+// of the label.
+func constraintsFor(t *testing.T, label config.Classification) policy.Constraints {
+	t.Helper()
+	e, err := policy.Compile(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := e.Decide(policy.Input{Declared: label})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d.Constraints
+}
+
 func snapshot() (*config.Snapshot, map[string]*config.Backend) {
 	bs := map[string]*config.Backend{
 		"partner": {ID: "partner", DestinationClass: config.ClassApprovedExternal, MaxClassification: config.LabelInternal},
@@ -27,11 +42,11 @@ func snapshot() (*config.Snapshot, map[string]*config.Backend) {
 
 func TestResolveKeepsTheRouteOrderWhenEverythingIsAllowed(t *testing.T) {
 	s, bs := snapshot()
-	r, seen, err := Resolve(s, "llama", policy.ConstraintsFor(config.LabelInternal))
+	r, seen, err := Resolve(s, "llama", constraintsFor(t, config.LabelInternal))
 	if err != nil || r.Backend != bs["local"] || r.UpstreamModel != "meta/llama" || len(seen) != 1 || seen[0].Excluded != "" {
 		t.Fatalf("route = %+v seen = %+v err = %v", r, seen, err)
 	}
-	r, _, err = Resolve(s, "shared", policy.ConstraintsFor(config.LabelInternal))
+	r, _, err = Resolve(s, "shared", constraintsFor(t, config.LabelInternal))
 	if err != nil || r.Backend != bs["partner"] || r.UpstreamModel != "p-model" {
 		t.Errorf("internal data may use the first target: %+v %v", r, err)
 	}
@@ -39,7 +54,7 @@ func TestResolveKeepsTheRouteOrderWhenEverythingIsAllowed(t *testing.T) {
 
 func TestSensitiveDataSkipsToAnAllowedTarget(t *testing.T) {
 	s, bs := snapshot()
-	r, seen, err := Resolve(s, "shared", policy.ConstraintsFor(config.LabelConfidential))
+	r, seen, err := Resolve(s, "shared", constraintsFor(t, config.LabelConfidential))
 	if err != nil || r.Backend != bs["local"] || r.UpstreamModel != "l-model" {
 		t.Fatalf("route = %+v err = %v", r, err)
 	}
@@ -50,7 +65,7 @@ func TestSensitiveDataSkipsToAnAllowedTarget(t *testing.T) {
 
 func TestNoEligibleBackend(t *testing.T) {
 	s, _ := snapshot()
-	_, seen, err := Resolve(s, "partner", policy.ConstraintsFor(config.LabelConfidential))
+	_, seen, err := Resolve(s, "partner", constraintsFor(t, config.LabelConfidential))
 	if !errors.Is(err, ErrNoEligibleBackend) || len(seen) != 1 || seen[0].Excluded == "" {
 		t.Errorf("err = %v seen = %+v", err, seen)
 	}
@@ -59,7 +74,7 @@ func TestNoEligibleBackend(t *testing.T) {
 func TestUnknownModels(t *testing.T) {
 	s, _ := snapshot()
 	for _, name := range []string{"missing", "empty", "dangling"} {
-		if _, _, err := Resolve(s, name, policy.ConstraintsFor(config.LabelPublic)); !errors.Is(err, ErrUnknownModel) {
+		if _, _, err := Resolve(s, name, constraintsFor(t, config.LabelInternal)); !errors.Is(err, ErrUnknownModel) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}

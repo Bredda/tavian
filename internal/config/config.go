@@ -11,11 +11,15 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/bredda/tavian/internal/inspect"
+	"github.com/bredda/tavian/internal/policy"
+	"github.com/bredda/tavian/internal/taxonomy"
 )
 
 // Profile is the deployment profile (ARCHITECTURE.md §2, ADR-0008).
@@ -41,43 +45,28 @@ func (p Profile) allows(c DestinationClass) bool {
 }
 
 // DestinationClass says where a backend runs, from a data-governance viewpoint.
-type DestinationClass string
+type DestinationClass = taxonomy.Class
 
 const (
-	ClassInternal         DestinationClass = "internal"
-	ClassApprovedExternal DestinationClass = "approved-external"
-	ClassPublicExternal   DestinationClass = "public-external"
+	ClassInternal         = taxonomy.ClassInternal
+	ClassApprovedExternal = taxonomy.ClassApprovedExternal
+	ClassPublicExternal   = taxonomy.ClassPublicExternal
 )
 
 // Classification is a data sensitivity label. The default scheme is ordered
 // public < internal < confidential < restricted (DOMAIN_MODEL.md).
-type Classification string
+type Classification = taxonomy.Label
 
 const (
-	LabelPublic       Classification = "public"
-	LabelInternal     Classification = "internal"
-	LabelConfidential Classification = "confidential"
-	LabelRestricted   Classification = "restricted"
+	LabelPublic       = taxonomy.Public
+	LabelInternal     = taxonomy.Internal
+	LabelConfidential = taxonomy.Confidential
+	LabelRestricted   = taxonomy.Restricted
 )
 
 // DefaultClearance is the label an application or group is cleared for when
 // the configuration says nothing: raising it is a decision to write down.
 const DefaultClearance = LabelInternal
-
-// Rank returns the position of c in the default scheme, or -1 if unknown.
-func (c Classification) Rank() int {
-	switch c {
-	case LabelPublic:
-		return 0
-	case LabelInternal:
-		return 1
-	case LabelConfidential:
-		return 2
-	case LabelRestricted:
-		return 3
-	}
-	return -1
-}
 
 // defaultMaxClassification is the most sensitive label a backend of the given
 // class may receive when the configuration does not say otherwise.
@@ -106,9 +95,23 @@ type Config struct {
 	// Inspection configures content inspection (SECURITY.md). It is on by
 	// default.
 	Inspection inspect.Config `yaml:"inspection"`
-	Backends   []Backend      `yaml:"backends"`
-	Models     []Model        `yaml:"models"`
-	APIKeys    []APIKey       `yaml:"api_keys"`
+	// Policy says where the policy files are (docs/POLICY.md). Without it only
+	// the built-in baseline policy applies.
+	Policy   PolicyConfig `yaml:"policy"`
+	Backends []Backend    `yaml:"backends"`
+	Models   []Model      `yaml:"models"`
+	APIKeys  []APIKey     `yaml:"api_keys"`
+
+	// PolicySources are the policy files read from Policy.Dir by Load. They are
+	// part of the configuration revision.
+	PolicySources []policy.Source `yaml:"-"`
+}
+
+// PolicyConfig locates the policy files.
+type PolicyConfig struct {
+	// Dir holds one or more YAML files, each with one or more policies. A
+	// relative path is relative to the configuration file. Reloadable.
+	Dir string `yaml:"dir"`
 }
 
 type ListenConfig struct {
@@ -285,7 +288,39 @@ func Load(path string) (*Config, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.Policy.Dir != "" {
+		dir := cfg.Policy.Dir
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(filepath.Dir(path), dir)
+		}
+		if cfg.PolicySources, err = readPolicyDir(dir); err != nil {
+			return nil, nil, err
+		}
+	}
 	return cfg, raw, nil
+}
+
+// readPolicyDir reads the *.yaml and *.yml files of dir, not recursively,
+// ignoring hidden files.
+func readPolicyDir(dir string) ([]policy.Source, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("policy.dir: %w", err)
+	}
+	var out []policy.Source
+	for _, e := range entries {
+		name := e.Name()
+		ext := filepath.Ext(name)
+		if e.IsDir() || strings.HasPrefix(name, ".") || (ext != ".yaml" && ext != ".yml") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // the directory is chosen by the operator in the configuration
+		if err != nil {
+			return nil, fmt.Errorf("policy.dir: %w", err)
+		}
+		out = append(out, policy.Source{Name: name, Raw: raw})
+	}
+	return out, nil
 }
 
 // Parse decodes YAML strictly and applies defaults.

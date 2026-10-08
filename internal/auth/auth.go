@@ -53,7 +53,9 @@ type Identity struct {
 	KeyID string
 	// Subject is the identity provider's stable identifier of the person or
 	// service account, when a token was used.
-	Subject       string
+	Subject string
+	// Groups are the groups the identity provider reported (OIDC only).
+	Groups        []string
 	Team          string
 	Application   string
 	AllowedModels []string

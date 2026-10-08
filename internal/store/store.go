@@ -129,17 +129,27 @@ type Revision struct {
 	Profile string
 	YAML    []byte
 	Version string
+	// Policies are the policy files of the revision, as JSON
+	// ([{"name": ..., "yaml": ...}]); empty means none.
+	Policies []byte
 }
 
 // SaveRevision records a configuration revision; recording the same revision
 // twice is a no-op.
 func (s *Store) SaveRevision(ctx context.Context, r Revision) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO config_revisions (revision, profile, config_yaml, tavian_version)
-		 VALUES ($1, $2, $3, $4) ON CONFLICT (revision) DO NOTHING`,
-		r.ID, r.Profile, string(r.YAML), r.Version)
+		`INSERT INTO config_revisions (revision, profile, config_yaml, tavian_version, policies)
+		 VALUES ($1, $2, $3, $4, $5::jsonb) ON CONFLICT (revision) DO NOTHING`,
+		r.ID, r.Profile, string(r.YAML), r.Version, policiesJSON(r.Policies))
 	if err != nil {
 		return fmt.Errorf("save config revision: %w", err)
 	}
 	return nil
+}
+
+func policiesJSON(b []byte) string {
+	if len(b) == 0 {
+		return "[]"
+	}
+	return string(b)
 }

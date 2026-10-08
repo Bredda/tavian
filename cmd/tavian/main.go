@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -102,8 +103,11 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "tavian:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "ok: revision=%s profile=%s backends=%d models=%d api_keys=%d\n",
-		snap.Revision, snap.Profile, len(snap.Backends), len(snap.Models), len(snap.Keys))
+	for _, w := range snap.Policy.Warnings() {
+		fmt.Fprintln(stderr, "warning:", w)
+	}
+	fmt.Fprintf(stdout, "ok: revision=%s profile=%s backends=%d models=%d api_keys=%d policies=%d\n",
+		snap.Revision, snap.Profile, len(snap.Backends), len(snap.Models), len(snap.Keys), len(snap.Policy.Names()))
 	return 0
 }
 
@@ -182,6 +186,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	metrics.WatchAPIKeys(holder, time.Now)
 	logKeyExpiries(log, snap, time.Now())
 	logInspection(log, snap)
+	logPolicies(log, snap)
 	var authn auth.Authenticator = auth.APIKeyAuthenticator{Snap: holder}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -346,8 +351,15 @@ func openStorage(ctx context.Context, db config.DatabaseConfig, guard *egress.Gu
 }
 
 func saveRevision(ctx context.Context, st *store.Store, snap *config.Snapshot, raw []byte) error {
+	var policies []byte
+	if len(snap.PolicySources) > 0 {
+		var err error
+		if policies, err = json.Marshal(snap.PolicySources); err != nil {
+			return fmt.Errorf("encode policies: %w", err)
+		}
+	}
 	return st.SaveRevision(ctx, store.Revision{
-		ID: snap.Revision, Profile: string(snap.Profile), YAML: raw, Version: version.String(),
+		ID: snap.Revision, Profile: string(snap.Profile), YAML: raw, Version: version.String(), Policies: policies,
 	})
 }
 
@@ -383,6 +395,7 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 	holder.Store(snap)
 	logKeyExpiries(log, snap, time.Now())
 	logInspection(log, snap)
+	logPolicies(log, snap)
 	log.Info("configuration reloaded", "revision", snap.Revision,
 		"backends", len(snap.Backends), "models", len(snap.Models))
 }
@@ -399,6 +412,14 @@ func logInspection(log *slog.Logger, snap *config.Snapshot) {
 		log.Warn("inspection.fingerprint_key_env is not set: finding fingerprints use a random key and only correlate within this process run")
 	}
 	log.Info("content inspection enabled", "detectors", len(in.Detectors()))
+}
+
+// logPolicies names the policies in force and repeats any warning about them.
+func logPolicies(log *slog.Logger, snap *config.Snapshot) {
+	for _, w := range snap.Policy.Warnings() {
+		log.Warn("policy warning", "warning", w)
+	}
+	log.Info("policies loaded", "policies", snap.Policy.Names())
 }
 
 // keyExpiryWarning is how far ahead keys that are about to expire are named in

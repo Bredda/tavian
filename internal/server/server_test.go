@@ -22,6 +22,7 @@ import (
 	"github.com/bredda/tavian/internal/egress"
 	"github.com/bredda/tavian/internal/meter"
 	"github.com/bredda/tavian/internal/mockllm"
+	"github.com/bredda/tavian/internal/policy"
 	"github.com/bredda/tavian/internal/provider/openai"
 )
 
@@ -58,6 +59,7 @@ type fixtureSpec struct {
 	deps        []func(*Deps)
 	snap        func(*config.Snapshot) // adjusts the compiled snapshot
 	external    bool                   // add an approved-external backend and the models that use it
+	policies    []policy.Source        // policy files in force
 }
 
 func inflightLimit(n int) int {
@@ -165,6 +167,7 @@ api_keys:
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.PolicySources = spec.policies
 	snap, err := config.Compile(cfg, []byte(yaml), func(string) string { return "" })
 	if err != nil {
 		t.Fatal(err)

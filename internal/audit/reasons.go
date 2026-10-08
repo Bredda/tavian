@@ -30,6 +30,7 @@ var (
 	ModelNotFound          = Reason{"MODEL_NOT_FOUND", "model_not_found", http.StatusNotFound, typeInvalid}
 	NoEligibleBackend      = Reason{"NO_ELIGIBLE_BACKEND", "no_eligible_backend", http.StatusForbidden, typeInvalid}
 	RoutingAssertion       = Reason{"ROUTING_ASSERTION_FAILED", "internal_error", http.StatusInternalServerError, typeServer}
+	PolicyError            = Reason{"POLICY_ERROR", "policy_error", http.StatusInternalServerError, typeServer}
 	MultimodalNotInspected = Reason{"MULTIMODAL_NOT_INSPECTABLE", "multimodal_not_inspectable", http.StatusBadRequest, typeInvalid}
 	RequestTooComplex      = Reason{"REQUEST_TOO_COMPLEX", "request_too_complex", http.StatusBadRequest, typeInvalid}
 	InspectionFailed       = Reason{"INSPECTION_FAILED", "inspection_failed", http.StatusServiceUnavailable, typeServer}
@@ -45,7 +46,7 @@ var (
 // All lists the catalogue, for documentation and tests.
 func All() []Reason {
 	return []Reason{
-		Served, InvalidRequest, RequestTooLarge, ModelNotAllowed, ClearanceExceeded, ModelNotFound, NoEligibleBackend, RoutingAssertion, MultimodalNotInspected,
+		Served, InvalidRequest, RequestTooLarge, ModelNotAllowed, ClearanceExceeded, ModelNotFound, NoEligibleBackend, RoutingAssertion, PolicyError, MultimodalNotInspected,
 		RequestTooComplex, InspectionFailed, UpstreamUnavailable, UpstreamError, StreamInterrupted, ClientDisconnected,
 	}
 }
