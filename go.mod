@@ -1,6 +1,6 @@
 module github.com/bredda/tavian
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/prometheus/client_golang v1.24.1
