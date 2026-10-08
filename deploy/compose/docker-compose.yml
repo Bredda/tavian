@@ -1,4 +1,5 @@
-# Tavian demo stack: the gateway in front of a mock OpenAI-compatible backend.
+# Tavian demo stack: the gateway in front of a mock OpenAI-compatible backend,
+# with PostgreSQL recording usage events.
 #
 #   docker compose -f deploy/compose/docker-compose.yml up --build
 #
@@ -7,22 +8,66 @@
 # network only so that Docker can publish its port to the host; it still
 # refuses every connection that is not a configured backend (egress guard).
 # In production, enforce this with network policies / firewall rules too.
+#
+# The database password below is for this demo only.
 name: tavian-demo
 
+x-database-url: &database-url
+  TAVIAN_DATABASE_URL: postgres://tavian:tavian-demo@postgres:5432/tavian?sslmode=disable
+
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: tavian
+      POSTGRES_PASSWORD: tavian-demo
+      POSTGRES_DB: tavian
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backplane]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tavian -d tavian"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  # One-shot: applies the database migrations, then exits.
+  migrate:
+    build:
+      context: ../..
+      args: { CMD: tavian }
+    image: tavian:dev
+    command: ["migrate"]
+    environment: *database-url
+    volumes:
+      - ./tavian.yaml:/etc/tavian/tavian.yaml:ro
+    networks: [backplane]
+    depends_on:
+      postgres: { condition: service_healthy }
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
   tavian:
     build:
       context: ../..
       args: { CMD: tavian }
     image: tavian:dev
     command: ["serve"]
+    environment: *database-url
     volumes:
       - ./tavian.yaml:/etc/tavian/tavian.yaml:ro
+      - spool:/var/lib/tavian/spool
     ports:
       - "127.0.0.1:8080:8080" # data plane (OpenAI-compatible API)
       - "127.0.0.1:9090:9090" # admin: /healthz /readyz /metrics
     networks: [backplane, publish]
-    depends_on: [mockllm]
+    depends_on:
+      mockllm: { condition: service_started }
+      migrate: { condition: service_completed_successfully }
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -38,6 +83,10 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+
+volumes:
+  pgdata: {}
+  spool: {}
 
 networks:
   backplane:

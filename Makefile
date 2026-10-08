@@ -21,6 +21,13 @@ build: ## Build the binaries into ./bin
 test: ## Run tests with the race detector
 	go test -race -count=1 ./...
 
+.PHONY: test-db
+test-db: ## Run the tests including PostgreSQL integration (starts a throwaway container)
+	-docker rm -f tavian-test-pg >/dev/null 2>&1
+	docker run -d --rm --name tavian-test-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=tavian -p 127.0.0.1:55432:5432 postgres:17-alpine >/dev/null
+	@until docker exec tavian-test-pg pg_isready -U postgres -d tavian >/dev/null 2>&1; do sleep 0.5; done
+	TAVIAN_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/tavian go test -race -count=1 ./... ; status=$$?; docker rm -f tavian-test-pg >/dev/null; exit $$status
+
 .PHONY: cover
 cover: ## Run tests and print total coverage
 	go test -race -count=1 -coverprofile=coverage.out ./...

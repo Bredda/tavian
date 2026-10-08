@@ -10,7 +10,8 @@ Requirements: Go (see `go.mod`), Docker (for the demo stack), `golangci-lint` v2
 make test        # unit tests with the race detector
 make lint        # golangci-lint
 make build       # binaries in ./bin
-make demo        # gateway + mock backend on localhost:8080, see README
+make demo        # gateway + PostgreSQL + mock backend on localhost:8080, see README
+make test-db     # tests incl. PostgreSQL integration (needs Docker); plain `make test` skips them
 ```
 
 No Go toolchain? The CI uses the same commands; locally you can run them through the `golang` Docker image.

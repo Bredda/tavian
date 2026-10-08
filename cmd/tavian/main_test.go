@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bredda/tavian/internal/auth"
+	"github.com/bredda/tavian/internal/config"
 )
 
 func TestKeygenAndValidate(t *testing.T) {
@@ -70,5 +75,49 @@ func TestUsage(t *testing.T) {
 	}
 	if code := run([]string{"version"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "tavian") {
 		t.Errorf("version exit = %d out = %q", code, out.String())
+	}
+}
+
+func TestReloadKeepsCurrentRevisionOnRejection(t *testing.T) {
+	_, hash, _ := auth.GenerateKey()
+	write := func(extra string) string {
+		path := filepath.Join(t.TempDir(), "tavian.yaml")
+		body := `profile: air-gapped
+` + extra + `backends:
+  - {id: local, type: openai, base_url: "http://127.0.0.1:9/v1", destination_class: internal}
+models:
+  - {name: m, type: chat, route: [{backend: local}]}
+api_keys:
+  - {id: dev, hash: "` + hash + `", team: t, application: a, allowed_models: ["*"]}
+`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	log := slog.New(slog.DiscardHandler)
+	first := write("")
+	cfg, raw, err := config.Load(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Compile(cfg, raw, os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := &config.Holder{}
+	holder.Store(snap)
+
+	// Changing the database section needs a restart: the revision must not move.
+	t.Setenv("TAVIAN_RELOAD_TEST_DB", "postgres://x")
+	reload(context.Background(), log, write("database:\n  url_env: TAVIAN_RELOAD_TEST_DB\n"), cfg, holder, nil)
+	if holder.Load() != snap {
+		t.Error("reload with a changed database section was applied")
+	}
+
+	// An unrelated, valid change is applied.
+	reload(context.Background(), log, write("log: {level: debug}\n"), cfg, holder, nil)
+	if holder.Load() == snap {
+		t.Error("valid reload was not applied")
 	}
 }

@@ -11,6 +11,9 @@ log:
   level: info
   format: json
 
+database:
+  url_env: TAVIAN_DATABASE_URL
+
 backends:
   - id: mockllm
     type: openai

@@ -31,7 +31,7 @@ The key above is public and for the demo only (`tavian keygen` makes real ones).
 
 ## What works today (M1 skeleton)
 
-API-key authentication with per-key model allow-lists · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts · health, readiness and Prometheus metrics. Content inspection, policy, quotas, PostgreSQL storage and OIDC are next; see the [roadmap](docs/ROADMAP.md).
+API-key authentication with per-key model allow-lists · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics. Content inspection, policy, quotas and OIDC are next; see the [roadmap](docs/ROADMAP.md).
 
 ## Development
 
