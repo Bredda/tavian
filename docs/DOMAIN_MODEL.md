@@ -50,7 +50,7 @@ Organization (one per deployment, for now)
 |---|---|
 | **ClassificationScheme** | Ordered labels, default `public < internal < confidential < restricted`. Configurable. |
 | **Ruleset** | Versioned set of detector configurations (PII patterns, secret patterns, custom dictionaries, ML models) and what finding types they emit. Shipped as signed offline bundles. |
-| **Finding** | Output of a detector: type, subtype, confidence, location, severity. Does not retain the matched text by default. |
+| **Finding** | Output of a detector: type, subtype, confidence, location, severity, and a keyed fingerprint of the value. Never retains the matched text. |
 | **Policy** | Declarative rules: allowed models, destinations by classification, actions on findings, response inspection mode, audit settings. Versioned. See [POLICY.md](POLICY.md). |
 | **PolicyBinding** | Attaches a Policy to a scope (org, team, application, user). |
 

@@ -67,6 +67,19 @@ Gaps found when comparing [SECURITY.md](SECURITY.md) with the code, closed first
 - Energy/carbon computed from configured profiles
 - `tavian policy test` and `shadow` mode
 
+Progress:
+
+- [x] Inspection framework: serializable detector interface, time-boxed engine that fails closed, keyed fingerprints, findings that never hold the matched text, summary in the usage event, metrics ([INSPECTION.md](INSPECTION.md))
+- [x] L0 detectors (e-mail, IBAN, payment card, NIR, phone, IPv4, token-shaped secrets, credential assignments) and L1 custom dictionaries and patterns
+- [x] Canary test that no content reaches logs, metrics, events or error bodies; fuzz targets for the extractor and detectors; latency benchmark
+- [ ] Decision records (refusals included), `decision_id`, stable reason codes
+- [ ] Classification, backend `max_classification`, routing by constraints, second "external" mock backend
+- [ ] Policy engine (YAML + CEL), `tavian policy test`, shadow mode
+- [ ] Quotas (reserve/settle, in memory)
+- [ ] Audit worker framework, hash chain, `tavian verify-audit`
+- [ ] Energy, carbon and price snapshot in usage events
+- [ ] End-to-end finance demo test in CI
+
 ## M3 — Operability
 
 - Admin API + CLI (config as code); read-only auditor role

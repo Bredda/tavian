@@ -47,18 +47,30 @@ log:
 #       allowed_models: ["llama-*"]
 #       # max_classification: internal  # clearance of this group (default internal); the highest of a person's groups applies
 
-# Content inspection looks for sensitive data (e-mail addresses today; more
-# detectors follow) in everything the caller sends, before anything leaves the
-# gateway. It is on by default and fails closed: a request that cannot be
-# inspected completely (a detector error, going over the budget, images or
-# other non-text parts) is refused, never served uninspected. Findings are
-# counted in the usage event; they never contain the matched text. Reloadable.
+# Content inspection looks for sensitive data in everything a request carries,
+# before anything leaves the gateway: e-mail addresses, IBANs, payment cards,
+# French NIR, phone numbers, IPv4 addresses, API keys and tokens, password
+# assignments, plus your own dictionaries and patterns. It is on by default and
+# observes only: findings (never the matched text) are counted in the usage
+# event and in metrics. It fails closed: a request that cannot be inspected
+# completely (a detector error, going over the budget, images or other non-text
+# parts) is refused, never served uninspected. Reloadable. See docs/INSPECTION.md.
 # inspection:
 #   enabled: true
 #   budget: 50ms                         # for the whole request
 #   # Secret for the fingerprints of findings (>= 16 bytes). Without it a random
 #   # key is generated at startup, so fingerprints only correlate within one run.
 #   fingerprint_key_env: TAVIAN_FINGERPRINT_KEY
+#   disable: [pii.ip]                    # built-in detectors that are too noisy for your data
+#   dictionaries:
+#     - name: codenames                  # the finding subtype; the detector is custom.codenames
+#       severity: high                   # low | medium (default) | high | critical
+#       terms: ["Projet Aurore", "Falcon"]
+#     - name: markings
+#       terms: ["CONFIDENTIEL", "DIFFUSION RESTREINTE"]
+#   patterns:
+#     - name: contract-ref
+#       regex: 'CTR-\d{6}'               # RE2 syntax
 
 # API reference (Scalar) at /docs and the OpenAPI description at /openapi.yaml,
 # served on the data port without authentication. Both are embedded in the

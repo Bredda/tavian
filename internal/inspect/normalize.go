@@ -8,8 +8,9 @@ import (
 
 // normalize removes the cheap ways of hiding a value from a pattern: invalid
 // UTF-8, invisible format characters (zero-width spaces, soft hyphens, bidi
-// controls) and full-width ASCII look-alikes. Offsets in findings refer to the
-// normalized text. Plain ASCII, the common case, is returned as is.
+// controls), exotic spaces and full-width ASCII look-alikes. Offsets in
+// findings refer to the normalized text. Plain ASCII, the common case, is
+// returned as is.
 func normalize(s string) string {
 	ascii := true
 	for i := 0; i < len(s); i++ {
@@ -33,8 +34,8 @@ func normalize(s string) string {
 			// invisible: dropped
 		case r >= 0xFF01 && r <= 0xFF5E:
 			b.WriteRune(r - 0xFEE0) // full-width ! .. ~ -> ASCII
-		case r == 0x3000:
-			b.WriteRune(' ')
+		case unicode.Is(unicode.Zs, r):
+			b.WriteRune(' ') // no-break and ideographic spaces become plain spaces
 		default:
 			b.WriteRune(r)
 		}

@@ -41,9 +41,9 @@ curl -s localhost:8080/v1/models -H "Authorization: Bearer $(make -s demo-token 
 
 Keycloak takes about 30 seconds to start; the gateway retries fetching its signing keys until it is up. Any OIDC provider works the same way, see the `oidc` section of the example configuration.
 
-## What works today (v0.1.0)
+## What works today (main, after v0.1.0)
 
-API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection, policy, quotas and audit evidence are next (M2); see the [roadmap](docs/ROADMAP.md).
+API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection looks for PII (e-mail, IBAN, payment cards, French NIR, phone, IPv4), secrets and your own dictionaries and patterns in everything a request carries, fails closed, and records findings (never the matched text) in the usage event; it observes only for now. Policy, classification-based routing, quotas and audit evidence are next (M2); see the [roadmap](docs/ROADMAP.md) and [docs/INSPECTION.md](docs/INSPECTION.md).
 
 ## Development
 
@@ -57,10 +57,10 @@ API-key authentication with per-key model allow-lists, or sign-in with any OIDC 
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, deployment profiles, request lifecycle, failure modes |
 | [docs/DOMAIN_MODEL.md](docs/DOMAIN_MODEL.md) | Core entities and their relationships |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, content inspection, data classification, egress control, audit |
+| [docs/INSPECTION.md](docs/INSPECTION.md) | What is inspected today, detectors, fail-closed behaviour, tuning |
 | [docs/POLICY.md](docs/POLICY.md) | Policy model, evaluation semantics, examples, lifecycle |
 | [docs/QUOTAS_AND_METERING.md](docs/QUOTAS_AND_METERING.md) | Quotas (reserve/settle), multi-dimensional metering incl. energy and carbon |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Scenario-driven milestones |
 | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) | Decisions still to make, research still to do |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, trunk-based workflow, commit conventions, releases |
 | [docs/adr/](docs/adr/README.md) | Architecture Decision Records |
-| [BASELINE.md](BASELINE.md) | Original raw idea notes (historical) |

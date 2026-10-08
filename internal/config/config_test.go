@@ -496,3 +496,51 @@ func TestInspectionSection(t *testing.T) {
 		t.Error("a typo in the inspection section must be rejected")
 	}
 }
+
+func TestInspectionDetectorsFromConfig(t *testing.T) {
+	azure := map[string]string{"AZURE_KEY": "k"}
+	s, err := compile(t, validYAML+`
+inspection:
+  disable: [pii.phone]
+  dictionaries:
+    - name: codenames
+      severity: high
+      terms: ["Projet Aurore", "Falcon"]
+    - name: markings
+      terms: ["DIFFUSION RESTREINTE"]
+      whole_word: false
+  patterns:
+    - name: contract
+      regex: 'CTR-\d{6}'
+`, azure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, d := range s.Inspector.Detectors() {
+		names[d.Name] = true
+	}
+	for _, want := range []string{"pii.iban", "custom.codenames", "custom.markings", "custom.contract"} {
+		if !names[want] {
+			t.Errorf("detector %s missing from %v", want, names)
+		}
+	}
+	if names["pii.phone"] {
+		t.Error("pii.phone should be disabled")
+	}
+
+	for name, section := range map[string]string{
+		"unknown detector": "inspection:\n  disable: [pii.nope]\n",
+		"bad regex":        "inspection:\n  patterns:\n    - {name: p, regex: '('}\n",
+		"no terms":         "inspection:\n  dictionaries:\n    - {name: d}\n",
+		"unknown field":    "inspection:\n  dictionaries:\n    - {name: d, terms: [abc], word: true}\n",
+	} {
+		cfg, perr := Parse([]byte(validYAML + section))
+		if perr != nil {
+			continue // rejected at parse time: also fine
+		}
+		if _, err := Compile(cfg, []byte(validYAML+section), env(azure)); err == nil || !strings.Contains(err.Error(), "inspection:") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}

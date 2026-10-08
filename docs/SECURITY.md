@@ -36,6 +36,8 @@ Trust boundaries: client ↔ gateway · gateway ↔ IdP · gateway ↔ PostgreSQ
 
 ## Content inspection
 
+*In main after v0.1.0:* the framework, the L0 detectors listed in [INSPECTION.md](INSPECTION.md), custom dictionaries and patterns, and fail-closed handling are built. They **observe only**: findings are recorded in the usage event and nothing acts on them yet; classification and actions come with the policy engine. L2/L3 below are planned.
+
 ### Principles
 
 - **Local only.** Detectors never call an external service. A detector that needs a model ships the model in the offline bundle.
@@ -47,8 +49,8 @@ Trust boundaries: client ↔ gateway · gateway ↔ IdP · gateway ↔ PostgreSQ
 
 | Layer | Detectors | Cost | Phase |
 |---|---|---|---|
-| **L0 — deterministic** | Regex + validators: email, phone, IBAN (mod-97), card numbers (Luhn), national IDs (e.g. French NIR checksum), IP/hostnames; secrets (cloud keys, tokens, private keys, high-entropy strings) | µs–ms | MVP |
-| **L1 — configurable** | Customer dictionaries and patterns (project code names, client lists, document markings like "CONFIDENTIEL") | ms | MVP |
+| **L0 — deterministic** | Scanners with validators: email, phone, IBAN (mod-97), card numbers (Luhn), French NIR (checksum), IPv4; secrets (cloud keys, tokens, private keys, JWT, credential assignments). *Planned: IPv6 and host names, other countries' national IDs, high-entropy strings* | µs–ms | MVP (built) |
+| **L1 — configurable** | Customer dictionaries and patterns (project code names, client lists, document markings like "CONFIDENTIEL") | ms | MVP (built) |
 | **L2 — local ML** | NER for names/addresses/organizations; text classifier for data classes; prompt-injection classifier. Small models, CPU-friendly, run in an optional local sidecar ([ADR-0012](adr/0012-ml-detectors-as-local-sidecar.md)) | 10s of ms | Later |
 | **L3 — LLM-as-judge** | An *internal* model reviewing ambiguous cases. Async or slow path only | 100s of ms+ | Optional |
 
@@ -61,12 +63,12 @@ Finding {
   subtype      string        // iban, nir, aws_access_key, …
   severity     enum          // low | medium | high | critical
   confidence   float
-  location     { message_index, start, end }
-  fingerprint  string        // keyed hash of the value, for dedup/correlation; never the value
+  location     { segment, message_index, field, part, start, end }   // offsets in the normalized text; field from a fixed vocabulary
+  fingerprint  string        // HMAC-SHA256(key, subtype || value), 128 bits; never the value
 }
 ```
 
-The matched text is not stored in findings. Fingerprints use a keyed hash so identical values can be correlated without being recoverable.
+The matched text is not stored in findings. Fingerprints use a keyed hash so identical values can be correlated without being recoverable. Usage events carry only a summary (counts per type, detector versions); locations and fingerprints are for decision records.
 
 ### Actions
 
@@ -78,10 +80,10 @@ Reversible pseudonymization (restoring original values in the response) is attra
 
 ### Request-side vs response-side
 
-- **Request:** synchronous and complete before anything leaves the gateway. This is the strong guarantee.
+- **Request:** synchronous and complete before anything leaves the gateway. This is the strong guarantee. Every string of the body is inspected, known field or not; a request that cannot be inspected completely (detector failure, budget exceeded, non-text part, too many strings) is refused.
 - **Response:** see streaming modes in [ARCHITECTURE.md](ARCHITECTURE.md#streaming). `enforce` can only protect what has not yet left the hold-back window.
 - **Tool calls and function arguments** are content and are inspected like messages.
-- **Multimodal parts** (images, audio, files) cannot be inspected in early versions; policy must choose `block` or an explicit `pass_through` flagged in the decision record.
+- **Multimodal parts** (images, audio, files, unknown types) cannot be inspected: such requests are refused (`multimodal_not_inspectable`). An explicit `pass_through` flagged in the decision record is planned with the policy engine.
 
 ## Data classification
 
@@ -147,7 +149,7 @@ We state these plainly rather than hide them:
 
 - Content inspection is **best-effort**. No detector set catches everything; paraphrased, encoded or obfuscated data can evade deterministic detectors, and ML detectors have error rates.
 - Response `enforce` mode cannot recall content already released.
-- Multimodal and file content are not inspected in early versions.
+- Multimodal and file content are not inspected, so requests carrying them are refused. Object keys in the request body are not inspected either.
 - A user can still memorize and retype data that the gateway never sees; the gateway controls only what passes through it.
 - TLS is not terminated by Tavian yet: run it behind a TLS-terminating proxy or service mesh, and keep the admin listener on a private interface. Native TLS on both listeners comes in M3. (PostgreSQL connections can already use TLS through the connection URL, `sslmode=verify-full`.)
 - A compromised gateway host defeats the gateway; hardening, signed builds and host isolation remain the operator's responsibility.
@@ -155,14 +157,14 @@ We state these plainly rather than hide them:
 
 ## Hardening checklist
 
-Status as of v0.1.0. Items are meant to become tests.
+Status on main after v0.1.0. Items are meant to become tests.
 
 - [x] Run as non-root, read-only filesystem, no capabilities (image and compose file)
 - [x] Separate listeners/ports for data plane and admin
 - [ ] TLS everywhere; mTLS to PostgreSQL and internal backends where possible. *Database TLS works through the URL; native listener TLS and backend mTLS: M3*
 - [x] Request size, header, and concurrency limits (`limits.max_request_bytes`, header timeout, `limits.max_inflight`)
-- [ ] CI check that no code path logs request/response bodies. *Planned with content inspection (M2): a canary test across success, error and stream paths, plus lint*
+- [x] CI check that no code path logs request/response bodies: a canary test sends sensitive values down the answered, streamed, backend-error, refused and inspection-failure paths and checks the logs (debug level), metrics, usage events and error bodies. *No lint rule yet; the response path is covered once response inspection exists*
 - [x] CI check that outbound connections only originate from the egress guard (`forbidigo` rule; PostgreSQL goes through the guard too)
-- [ ] Fuzzing for the request parser and detectors. *Detectors with content inspection (M2); parsers right after*
+- [ ] Fuzzing for the request parser and detectors. *Done for the content extractor and the detectors (`make fuzz`, seed corpora run in `go test`); the SSE, JWT and configuration parsers and scheduled runs: M3*
 - [x] Dependency updates (Dependabot for Go modules, Actions, Docker, and the conformance suite's SDK pins)
 - [ ] SBOM, signed releases. *Release archives carry checksums today; signing and SBOM are v1.0 (see [OPEN_QUESTIONS](OPEN_QUESTIONS.md) 21)*
