@@ -58,7 +58,7 @@ keygen: ## Generate an API key and its config hash
 	go run ./cmd/tavian keygen
 
 .PHONY: demo
-demo: ## Start the demo stack (gateway + mock backend) on localhost:8080
+demo: ## Start the demo stack (gateway, PostgreSQL, Keycloak, mock backend) on localhost:8080
 	$(COMPOSE) up --build -d
 	@echo "Try: curl -s localhost:8080/v1/models -H 'Authorization: Bearer tav_VavQsTNlrxWVesBv7GinuMLhYBbmhns_YNloIcWS3UI'"
 

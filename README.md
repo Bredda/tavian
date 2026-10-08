@@ -2,7 +2,7 @@
 
 **Sovereign LLM gateway.** Identity, content security, policy, quotas, metering and audit for LLM access inside organizations that cannot afford to lose control of their data.
 
-> **Status: pre-alpha — design phase.** Nothing is implemented yet. The documents below are a first draft meant to be challenged.
+> **Status: pre-alpha.** v0.1.0 is the walking skeleton (see [what works today](#what-works-today-v010)): identity, an OpenAI-compatible API and metering run end to end. Content inspection, policy and quotas, which are what the project is about, are designed but not built yet. The design documents below are drafts meant to be challenged.
 
 ## What it is
 
@@ -16,7 +16,7 @@ with one hard constraint: **it must run fully on-prem and air-gapped.** The only
 
 ## Quick start (demo)
 
-Requires Docker. This starts the gateway in front of a mock OpenAI-compatible backend that sits on a network with no route to the Internet:
+Requires Docker. This starts the gateway, PostgreSQL, Keycloak and a mock OpenAI-compatible backend. The backend sits on a network with no route to the Internet. The first start takes about 30 seconds (Keycloak):
 
 ```bash
 make demo
@@ -41,9 +41,9 @@ curl -s localhost:8080/v1/models -H "Authorization: Bearer $(make -s demo-token 
 
 Keycloak takes about 30 seconds to start; the gateway retries fetching its signing keys until it is up. Any OIDC provider works the same way, see the `oidc` section of the example configuration.
 
-## What works today (M1 skeleton)
+## What works today (v0.1.0)
 
-API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection, policy and quotas are next; see the [roadmap](docs/ROADMAP.md).
+API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection, policy, quotas and audit evidence are next (M2); see the [roadmap](docs/ROADMAP.md).
 
 ## Development
 

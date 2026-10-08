@@ -26,7 +26,7 @@ Trust boundaries: client ↔ gateway · gateway ↔ IdP · gateway ↔ PostgreSQ
 | T4 | Prompt injection causing data exfiltration through tools/URLs | Never fetch URLs from prompts; injection signal detectors; tool-call content inspection; response inspection `enforce` |
 | T5 | Malicious model output (leaked secrets, harmful content) | Response inspection per policy |
 | T6 | Insider admin weakens policy or alters evidence | Separated roles; every config change is a versioned, audited `ConfigRevision`; hash-chained audit with external anchoring; policy changes can require two-person approval |
-| T7 | Compromised external provider / network attacker | TLS with pinned CA bundle option; egress allow-list; only data allowed by policy is ever sent |
+| T7 | Compromised external provider / network attacker | Egress allow-list; only data allowed by policy is ever sent; TLS with pinned CA bundle option (planned) |
 | T8 | Data exfiltration from the gateway itself | Egress guard; no telemetry; network policies deny all other egress; air-gapped profile refuses non-internal dialing |
 | T9 | DoS via expensive requests (huge prompts, ReDoS) | Size limits, admission control before inspection, RE2 regex (linear time), per-detector time budgets |
 | T10 | SSRF via prompt content or configuration | Gateway never dereferences URLs from requests; backend endpoints come only from validated config |
@@ -97,11 +97,12 @@ Backends declare `destination_class` and `max_classification`. A request may onl
 
 ## Egress control
 
+*In v0.1.0:* single egress guard (backends, identity provider, PostgreSQL), allow-list, deployment profiles, internal-address enforcement, lint rule against other dialing. Everything marked "planned" below is not built yet.
+
 - The gateway is the only component with outbound access, via a single egress guard. That covers model backends, the identity provider and PostgreSQL: the database connection is made with the guard's dialer and, whatever the profile, may only reach an internal address (unix sockets are refused). A lint rule (`forbidigo`) fails the build if any other package dials, resolves names or uses a ready-made HTTP client.
-- Outbound destinations are derived only from validated Backend configuration; the active deployment profile gates which destination classes may exist.
+- Outbound destinations are derived only from validated configuration (backends, the identity provider) and the database URL chosen by the operator, never from request content; the active deployment profile gates which destination classes may exist.
 - In `air-gapped`, configuration containing a non-internal Backend is rejected at load, and the dialer refuses non-internal addresses even if one slipped through.
-- Optional outbound proxy and custom CA bundle for corporate networks.
-- Reference Kubernetes `NetworkPolicy` and firewall rules ship with the deployment manifests so the guarantee does not depend on the application alone.
+- Planned: optional outbound proxy and custom CA bundle for corporate networks, and reference Kubernetes `NetworkPolicy` and firewall rules shipped with the deployment manifests, so that the guarantee does not depend on the application alone. Until then, enforce the same boundary with your own firewall or network policies.
 - No telemetry, update checks or licence checks. Ever.
 
 ## Audit
