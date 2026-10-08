@@ -188,3 +188,22 @@ func TestPolicyTestUsageAndConfigErrors(t *testing.T) {
 		t.Errorf("invalid policies: exit %d, %q", code, e)
 	}
 }
+
+// The outcome is checked even when nothing else is: a case that expects a
+// request to be served must fail when it is refused, and the other way round.
+func TestPolicyTestChecksTheOutcomeAlone(t *testing.T) {
+	dir := workspace(t, nil)
+	code, out, _ := runTest(t, dir, fixtureHead+`
+  - name: expects served, is refused
+    caller: { team: t }
+    request: { model: nope }
+    expect: { outcome: served }
+  - name: expects refused, is served
+    caller: { team: t }
+    request: { model: shared }
+    expect: { outcome: refused }
+`)
+	if code != 1 || strings.Count(out, "FAIL") != 2 || !strings.Contains(out, `outcome: got "refused", want "served"`) || !strings.Contains(out, `outcome: got "served", want "refused"`) {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
