@@ -1,6 +1,6 @@
 # ADR-0010: Transactional outbox instead of a message broker
 
-- Status: Proposed
+- Status: Accepted (2026-10-08), implemented in M1
 - Date: 2026-10-08
 
 ## Context

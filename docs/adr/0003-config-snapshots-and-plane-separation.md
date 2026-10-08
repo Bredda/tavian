@@ -1,6 +1,6 @@
 # ADR-0003: Data plane serves from config snapshots; control plane is a separate boundary
 
-- Status: Proposed
+- Status: Accepted (2026-10-08), implemented in M1
 - Date: 2026-10-08
 
 ## Context
