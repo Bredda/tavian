@@ -5,26 +5,61 @@ import (
 	"testing"
 
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/policy"
 )
 
-func TestResolve(t *testing.T) {
-	b := &config.Backend{ID: "local"}
-	s := &config.Snapshot{
-		Backends: map[string]*config.Backend{"local": b},
+func snapshot() (*config.Snapshot, map[string]*config.Backend) {
+	bs := map[string]*config.Backend{
+		"partner": {ID: "partner", DestinationClass: config.ClassApprovedExternal, MaxClassification: config.LabelInternal},
+		"local":   {ID: "local", DestinationClass: config.ClassInternal, MaxClassification: config.LabelRestricted},
+	}
+	return &config.Snapshot{
+		Backends: bs,
 		Models: map[string]*config.Model{
-			"llama": {Name: "llama", Route: []config.Target{{Backend: "local", UpstreamModel: "meta/llama"}}},
-			"empty": {Name: "empty"},
+			"llama":    {Name: "llama", Route: []config.Target{{Backend: "local", UpstreamModel: "meta/llama"}}},
+			"shared":   {Name: "shared", Route: []config.Target{{Backend: "partner", UpstreamModel: "p-model"}, {Backend: "local", UpstreamModel: "l-model"}}},
+			"partner":  {Name: "partner", Route: []config.Target{{Backend: "partner", UpstreamModel: "p-only"}}},
+			"empty":    {Name: "empty"},
+			"dangling": {Name: "dangling", Route: []config.Target{{Backend: "gone"}}},
 		},
+	}, bs
+}
+
+func TestResolveKeepsTheRouteOrderWhenEverythingIsAllowed(t *testing.T) {
+	s, bs := snapshot()
+	r, seen, err := Resolve(s, "llama", policy.ConstraintsFor(config.LabelInternal))
+	if err != nil || r.Backend != bs["local"] || r.UpstreamModel != "meta/llama" || len(seen) != 1 || seen[0].Excluded != "" {
+		t.Fatalf("route = %+v seen = %+v err = %v", r, seen, err)
 	}
-	r, err := Resolve(s, "llama")
-	if err != nil {
-		t.Fatal(err)
+	r, _, err = Resolve(s, "shared", policy.ConstraintsFor(config.LabelInternal))
+	if err != nil || r.Backend != bs["partner"] || r.UpstreamModel != "p-model" {
+		t.Errorf("internal data may use the first target: %+v %v", r, err)
 	}
-	if r.Backend != b || r.UpstreamModel != "meta/llama" {
-		t.Errorf("route = %+v", r)
+}
+
+func TestSensitiveDataSkipsToAnAllowedTarget(t *testing.T) {
+	s, bs := snapshot()
+	r, seen, err := Resolve(s, "shared", policy.ConstraintsFor(config.LabelConfidential))
+	if err != nil || r.Backend != bs["local"] || r.UpstreamModel != "l-model" {
+		t.Fatalf("route = %+v err = %v", r, err)
 	}
-	for _, name := range []string{"missing", "empty"} {
-		if _, err := Resolve(s, name); !errors.Is(err, ErrUnknownModel) {
+	if len(seen) != 2 || seen[0].Backend != "partner" || seen[0].Excluded != policy.ExcludedClearance || seen[1].Backend != "local" || seen[1].Excluded != "" {
+		t.Errorf("candidates = %+v, want the set-aside partner then the chosen local", seen)
+	}
+}
+
+func TestNoEligibleBackend(t *testing.T) {
+	s, _ := snapshot()
+	_, seen, err := Resolve(s, "partner", policy.ConstraintsFor(config.LabelConfidential))
+	if !errors.Is(err, ErrNoEligibleBackend) || len(seen) != 1 || seen[0].Excluded == "" {
+		t.Errorf("err = %v seen = %+v", err, seen)
+	}
+}
+
+func TestUnknownModels(t *testing.T) {
+	s, _ := snapshot()
+	for _, name := range []string{"missing", "empty", "dangling"} {
+		if _, _, err := Resolve(s, name, policy.ConstraintsFor(config.LabelPublic)); !errors.Is(err, ErrUnknownModel) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}

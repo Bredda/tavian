@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ type fixture struct {
 	narrow string // key limited to "other-*" models
 	conf   string // key cleared up to "confidential"
 	top    string // key cleared up to "restricted"
+	// partnerCalls counts requests that reached the approved-external backend
+	// (only with fixtureSpec.external).
+	partnerCalls *atomic.Int64
 }
 
 func newFixture(t *testing.T, maxBody int64) *fixture {
@@ -53,6 +57,7 @@ type fixtureSpec struct {
 	wrap        func(*meter.MemorySink) meter.Sink
 	deps        []func(*Deps)
 	snap        func(*config.Snapshot) // adjusts the compiled snapshot
+	external    bool                   // add an approved-external backend and the models that use it
 }
 
 func inflightLimit(n int) int {
@@ -67,7 +72,7 @@ func buildFixture(t *testing.T, spec fixtureSpec) *fixture {
 	maxBody, wrap, opts := spec.maxBody, spec.wrap, spec.deps
 	backend := spec.backend
 	if backend == nil {
-		backend = mockllm.Handler()
+		backend = mockllm.HandlerNamed("local")
 	}
 	llm := httptest.NewServer(backend)
 	t.Cleanup(llm.Close)
@@ -80,8 +85,38 @@ func buildFixture(t *testing.T, spec fixtureSpec) *fixture {
 	conf, confHash, _ := auth.GenerateKey()
 	top, topHash, _ := auth.GenerateKey()
 
+	profile, extraBackends, extraModels := "air-gapped", "", ""
+	partnerCalls := &atomic.Int64{}
+	if spec.external {
+		partner := mockllm.HandlerNamed("partner-eu")
+		ext := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			partnerCalls.Add(1)
+			partner.ServeHTTP(w, r)
+		}))
+		t.Cleanup(ext.Close)
+		profile = "controlled-egress"
+		extraBackends = fmt.Sprintf(`
+  - id: partner
+    type: openai
+    base_url: %s/v1
+    destination_class: approved-external
+    max_classification: internal`, ext.URL)
+		extraModels = `
+  - name: shared
+    type: chat
+    route:
+      - backend: partner
+        upstream_model: mock-partner
+      - backend: local
+        upstream_model: mock-local
+  - name: partner-only
+    type: chat
+    route:
+      - backend: partner
+        upstream_model: mock-partner`
+	}
 	yaml := fmt.Sprintf(`
-profile: air-gapped
+profile: %s
 limits:
   max_request_bytes: %d
   max_inflight: %d
@@ -89,7 +124,7 @@ backends:
   - id: local
     type: openai
     base_url: %s/v1
-    destination_class: internal
+    destination_class: internal%s
 models:
   - name: llama-70b
     type: chat
@@ -100,13 +135,13 @@ models:
     type: chat
     route:
       - backend: local
-        upstream_model: mock-fail
+        upstream_model: mock-fail%s
 api_keys:
   - id: dev
     hash: %s
     team: research
     application: demo
-    allowed_models: ["llama-*", "broken"]
+    allowed_models: ["llama-*", "broken", "shared", "partner-only"]
   - id: narrow
     hash: %s
     team: research
@@ -116,15 +151,15 @@ api_keys:
     hash: %s
     team: finance
     application: ledger
-    allowed_models: ["llama-*", "broken"]
+    allowed_models: ["llama-*", "broken", "shared", "partner-only"]
     max_classification: confidential
   - id: vault
     hash: %s
     team: security
     application: vault
-    allowed_models: ["llama-*", "broken"]
+    allowed_models: ["llama-*", "broken", "shared", "partner-only"]
     max_classification: restricted
-`, maxBody, inflightLimit(spec.maxInflight), llm.URL, keyHash, narrowHash, confHash, topHash)
+`, profile, maxBody, inflightLimit(spec.maxInflight), llm.URL, extraBackends, extraModels, keyHash, narrowHash, confHash, topHash)
 
 	cfg, err := config.Parse([]byte(yaml))
 	if err != nil {
@@ -162,7 +197,7 @@ api_keys:
 	t.Cleanup(gw.Close)
 	admin := httptest.NewServer(NewAdminHandler(holder, m, nil))
 	t.Cleanup(admin.Close)
-	return &fixture{gw: gw, admin: admin, sink: sink, key: key, narrow: narrow, conf: conf, top: top}
+	return &fixture{gw: gw, admin: admin, sink: sink, key: key, narrow: narrow, conf: conf, top: top, partnerCalls: partnerCalls}
 }
 
 func (f *fixture) post(t *testing.T, key, body string) *http.Response {

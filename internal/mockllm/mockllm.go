@@ -19,7 +19,12 @@ import (
 // (arguments {"echo": "<last user message>"}) unless the conversation already
 // ends with a tool result. Responses expose the top-level request fields in
 // system_fingerprint so tests can check what a gateway forwarded.
-func Handler() http.Handler {
+func Handler() http.Handler { return HandlerNamed("") }
+
+// HandlerNamed is Handler for a mock that tells which one it is: responses
+// carry x_mock_backend: name, so a test or a demo can see which of several
+// mocks answered.
+func HandlerNamed(name string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -27,7 +32,7 @@ func Handler() http.Handler {
 			"data":   []map[string]any{{"id": "mock", "object": "model", "owned_by": "mockllm"}},
 		})
 	})
-	mux.HandleFunc("POST /v1/chat/completions", chat)
+	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) { chat(w, r, name) })
 	return mux
 }
 
@@ -49,7 +54,7 @@ type chatRequest struct {
 	} `json:"messages"`
 }
 
-func chat(w http.ResponseWriter, r *http.Request) {
+func chat(w http.ResponseWriter, r *http.Request, name string) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errBody("could not read body"))
@@ -114,13 +119,17 @@ func chat(w http.ResponseWriter, r *http.Request) {
 	}
 	created := time.Now().Unix()
 	envelope := func(object string) map[string]any {
-		return map[string]any{
+		e := map[string]any{
 			"id": "chatcmpl-mock", "object": object, "created": created, "model": req.Model,
 			"system_fingerprint": fingerprint,
 			// Not part of the OpenAI schema: lets tests see which model name
 			// the backend was actually asked for.
 			"x_mock_received_model": req.Model,
 		}
+		if name != "" {
+			e["x_mock_backend"] = name
+		}
+		return e
 	}
 
 	if !req.Stream {
