@@ -101,7 +101,18 @@ A caller can only raise the label, never lower it below what inspection infers.
 - **Inferred**, by a built-in table that the policy engine will load from configuration: any secret → `restricted`; IBAN, payment card, French NIR → `confidential`. E-mail, phone, IP address and custom detectors do not raise the label on their own (the default `internal` already keeps them off public destinations). The inference uses every kind of finding seen, even when the detailed findings were cut at the per-request cap.
 - **Clearance:** a request whose label is above the caller's clearance (`max_classification` of the key or the person's groups, [API_KEYS.md](API_KEYS.md#clearance-max_classification)) is refused with 403 `classification_exceeds_clearance`, never silently lowered. The message names the label, never the content.
 
-Routing by destination class and backend `max_classification` follows in the next step; until then the label is recorded and enforced against the caller's clearance only.
+**Routing enforces the label.** The policy turns the label into constraints: which destination classes may receive it. The built-in table (an organization guardrail in spirit, which the policy engine will load from configuration and let narrower scopes only restrict) is:
+
+| Label | Destination classes allowed |
+|---|---|
+| `public` | internal, approved-external, public-external |
+| `internal` | internal, approved-external |
+| `confidential` | internal |
+| `restricted` | internal |
+
+Routing walks the targets of the requested model in order and takes the first backend that satisfies **both** its own `max_classification` (default: `restricted` for internal backends, `internal` for approved-external, `public` for public-external) **and** the table above. A model served by an external provider and by the on-prem backend therefore goes to the external one for ordinary data and to the on-prem one for an IBAN, even though the external one comes first. If no target is eligible the request is refused with 403 `no_eligible_backend`; the message names the label, never the content. The decision record lists the backends considered, in order, with why each one before the chosen one was set aside (`BACKEND_CLASSIFICATION_TOO_LOW`, `DESTINATION_CLASS_NOT_ALLOWED`).
+
+**Phase B.** After routing, an independent check recomputes the constraints from the label alone and asserts that the chosen backend satisfies them. A failure means a routing bug: the request is refused with 500 (`ROUTING_ASSERTION_FAILED`, recorded) rather than sent. Failover (M3) will only consider candidates that already passed the filter.
 
 Backends declare `destination_class` and `max_classification`. A request may only be routed to a Backend with `max_classification ≥ label` whose destination class the policy allows for that label. Classification is thus enforced by *routing*, not by hoping each rule is written correctly.
 
@@ -126,7 +137,7 @@ Always, for every request (including refused ones): the `DecisionRecord` — ide
 | Outcome | Reason codes |
 |---|---|
 | `served` | `SERVED` |
-| `refused` | `INVALID_REQUEST`, `REQUEST_TOO_LARGE`, `MODEL_NOT_ALLOWED`, `MODEL_NOT_FOUND`, `MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`, `UPSTREAM_UNAVAILABLE` |
+| `refused` | `INVALID_REQUEST`, `REQUEST_TOO_LARGE`, `MODEL_NOT_ALLOWED`, `CLEARANCE_EXCEEDED`, `MODEL_NOT_FOUND`, `NO_ELIGIBLE_BACKEND`, `ROUTING_ASSERTION_FAILED`, `MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`, `UPSTREAM_UNAVAILABLE` |
 | `failed` | `UPSTREAM_ERROR` (the backend answered with an error status), `STREAM_INTERRUPTED`, `CLIENT_DISCONNECTED` |
 
 Reason codes are stable; the OpenAI-compatible error `code` that SDKs see (`model_not_allowed`, …) is unchanged. Spooled records that cannot be read back are set aside in `events.rejected` and counted (`tavian_spool_rejected_records_total`), never dropped. The hash chain over these records is the next step ([roadmap](ROADMAP.md)).

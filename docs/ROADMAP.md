@@ -74,7 +74,7 @@ Progress:
 - [x] Canary test that no content reaches logs, metrics, events or error bodies; fuzz targets for the extractor and detectors; latency benchmark
 - [x] Decision records for every authenticated request (refusals included), `decision_id` in the error body and `X-Tavian-Decision-Id`, stable reason codes, kind-aware outbox and spool ([SECURITY.md](SECURITY.md#audit))
 - [x] Classification: label from declared header, default and inferred findings, enforced against the caller's clearance, recorded in decision records, usage events and a metric
-- [ ] Backend `max_classification`, routing by constraints, phase B assertion, second "external" mock backend
+- [x] Routing by constraints (backend `max_classification` and destination class per label), candidates in the decision record, phase B assertion, named mock backends and an approved-external mock in the demo stack
 - [ ] Policy engine (YAML + CEL), `tavian policy test`, shadow mode
 - [ ] Quotas (reserve/settle, in memory)
 - [ ] Outbox worker framework (consumer cursors, runner), hash chain over decision records, `tavian verify-audit`

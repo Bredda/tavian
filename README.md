@@ -24,10 +24,21 @@ curl -s localhost:8080/v1/chat/completions \
   -H 'Authorization: Bearer tav_VavQsTNlrxWVesBv7GinuMLhYBbmhns_YNloIcWS3UI' \
   -H 'Content-Type: application/json' \
   -d '{"model":"demo-chat","messages":[{"role":"user","content":"Bonjour"}]}'
+```
+
+Then watch the classification at work. The demo has an on-prem backend and a mock "approved external" provider; the model `demo-shared` is served by both, the external one first. An ordinary prompt goes out, a prompt with an IBAN stays on-prem (the finance key is cleared for `confidential` data, the first key is not and is refused):
+
+```bash
+FIN=tav_EV1tUN4aJqmj1nDwAuRd_juZk1MpqqRyuqC9bZ75DK0
+ask() { curl -s localhost:8080/v1/chat/completions -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"$3\"}]}" | grep -o '"x_mock_backend":"[^"]*"\|"code":"[^"]*"'; }
+ask $FIN demo-shared "Bonjour"                                          # answered by partner-eu
+ask $FIN demo-shared "Vire 100 EUR vers FR14 2004 1010 0505 0001 3M02 606"   # answered by on-prem
+ask $FIN demo-partner "Vire 100 EUR vers FR14 2004 1010 0505 0001 3M02 606"  # no_eligible_backend
 make demo-down
 ```
 
-The key above is public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
+Every answer carries an `X-Tavian-Decision-Id` header, and the decision record in PostgreSQL (`outbox`, kind `decision`) says why. The keys above are public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
 
 ### Sign in with OIDC
 

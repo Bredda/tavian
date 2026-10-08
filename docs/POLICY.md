@@ -29,6 +29,8 @@ Organization  →  Team  →  Application  →  User
 
 Phase B is defence in depth: routing already filters on constraints, and this check ensures a bug there cannot leak data.
 
+*In main after v0.1.0:* both phases run with a built-in default (the `destinations` table and the finding-to-label inference, see [SECURITY.md](SECURITY.md#data-classification)); the YAML + CEL engine will load the same shapes from policy files.
+
 ### Action precedence on findings
 
 When several rules match, the most restrictive action wins:
