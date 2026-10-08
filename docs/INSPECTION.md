@@ -22,7 +22,7 @@ A request is **refused**, never served uninspected, when:
 | The request has a non-text content part: image, audio, file, or any type the gateway does not know | 400 | `multimodal_not_inspectable` |
 | The request has more than 20 000 strings or is nested deeper than 64 levels | 400 | `request_too_complex` |
 
-A refused request leaves a usage event (`outcome: inspection_blocked`) carrying the reason. Turning inspection off (`inspection.enabled: false`) is an explicit choice: requests are then served without being inspected, events say `skipped`, and the gateway logs a warning at startup.
+A refused request leaves a decision record carrying the reason code (`MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`), and the error body names its `decision_id`. Turning inspection off (`inspection.enabled: false`) is an explicit choice: requests are then served without being inspected, usage events and decision records say `skipped`, and the gateway logs a warning at startup.
 
 ## Built-in detectors
 
@@ -68,7 +68,7 @@ inspection:
 
 A finding carries: detector, type, subtype, severity, confidence, and a location (message index, field name from a fixed vocabulary, part index, byte offsets). It also carries a **fingerprint**: `HMAC-SHA256(key, subtype ‖ value)` truncated to 128 bits, so the same value can be correlated across requests without being recoverable. **The matched text is never stored**, logged, or put in a metric label or an error message; a canary test checks the logs, metrics, events and error bodies on every path.
 
-The usage event holds a **summary**: status, finding count, count per `type.subtype`, detector versions, duration. Fingerprints and locations are not in it yet; they go into decision records ([roadmap](ROADMAP.md)).
+The usage event and the decision record both hold a **summary**: status, finding count, count per `type.subtype`, detector versions, duration. The decision record also holds the **findings themselves** (detector, type, subtype, severity, confidence, location, fingerprint), capped at 200 per request with `findings_truncated` set when there are more; the summary counts stay complete.
 
 Set `inspection.fingerprint_key_env` to the name of an environment variable holding a secret (16+ bytes) to make fingerprints stable across restarts and replicas. Without it a random key is generated at startup and the gateway logs a warning: fingerprints then only correlate within one run. Changing the key changes every fingerprint.
 

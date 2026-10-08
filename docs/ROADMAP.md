@@ -37,7 +37,7 @@ Progress (skeleton merged = ✓):
 - [x] Content-free structured logs, `/healthz`, `/readyz`, `/metrics`
 - [x] Compose demo on an Internet-less network (gateway + mock backend)
 - [x] PostgreSQL: embedded migrations (`tavian migrate`), usage events via transactional outbox ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)) with a bounded disk spool and fail-closed admission, every config revision persisted
-- [ ] Outbox consumers (rollups, export) and retention: events accumulate until they exist
+- [ ] Outbox consumers (rollups, export) and retention: events accumulate until they exist *(scheduled in M2: worker framework with the audit hash chain, then retention and a minimal rollup; chargeback export stays in M3)*
 - [x] Generic OIDC bearer validation (JWKS cache with max staleness, group → team/model mappings) behind the `Authenticator` interface
 - [x] PostgreSQL in the compose stack
 - [x] Keycloak in the compose stack (realm `tavian`, users alice and bob)
@@ -72,11 +72,12 @@ Progress:
 - [x] Inspection framework: serializable detector interface, time-boxed engine that fails closed, keyed fingerprints, findings that never hold the matched text, summary in the usage event, metrics ([INSPECTION.md](INSPECTION.md))
 - [x] L0 detectors (e-mail, IBAN, payment card, NIR, phone, IPv4, token-shaped secrets, credential assignments) and L1 custom dictionaries and patterns
 - [x] Canary test that no content reaches logs, metrics, events or error bodies; fuzz targets for the extractor and detectors; latency benchmark
-- [ ] Decision records (refusals included), `decision_id`, stable reason codes
+- [x] Decision records for every authenticated request (refusals included), `decision_id` in the error body and `X-Tavian-Decision-Id`, stable reason codes, kind-aware outbox and spool ([SECURITY.md](SECURITY.md#audit))
 - [ ] Classification, backend `max_classification`, routing by constraints, second "external" mock backend
 - [ ] Policy engine (YAML + CEL), `tavian policy test`, shadow mode
 - [ ] Quotas (reserve/settle, in memory)
-- [ ] Audit worker framework, hash chain, `tavian verify-audit`
+- [ ] Outbox worker framework (consumer cursors, runner), hash chain over decision records, `tavian verify-audit`
+- [ ] Outbox retention (only sealed segments read by every consumer, seals kept) and a minimal hourly usage rollup, closing the M1 item on consumers and retention
 - [ ] Energy, carbon and price snapshot in usage events
 - [ ] End-to-end finance demo test in CI
 

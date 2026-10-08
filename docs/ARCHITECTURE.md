@@ -91,7 +91,7 @@ Notes:
 - **Admission before inspection** (step 3) prevents inspection CPU from becoming a DoS vector.
 - **Quota reservation after routing** (step 11) because cost depends on the chosen backend's price.
 - **Failover never widens constraints.** If the preferred backend fails, only other candidates that already passed the constraint filter are eligible.
-- Steps 2–10 produce a **decision record** (rules matched, findings, chosen backend, reasons) even for refused requests.
+- Steps 4–10 produce a **decision record** (findings, chosen backend, reason code; rules matched and constraints arrive with the policy engine) even for refused requests. It exists from the moment the caller is authenticated: a request refused earlier (bad credentials, overload) leaves metrics and logs only, because recording unauthenticated traffic would let anyone fill the audit trail.
 
 ### Streaming
 
@@ -132,7 +132,7 @@ Compatibility with existing SDKs is a primary adoption driver.
 Rules:
 
 - The gateway **never fetches URLs found in prompts** (e.g. `image_url`). Multimodal parts are blocked or passed through by explicit policy; an inspection gap is declared, not hidden.
-- Error bodies follow the OpenAI error shape, extended with a stable `code` and a `decision_id` for support/audit correlation. They never echo detected sensitive values.
+- Error bodies follow the OpenAI error shape, extended with a stable `code` and, for authenticated callers, a `decision_id` (also in the `X-Tavian-Decision-Id` response header) that names the decision record explaining the answer. They never echo detected sensitive values.
 - `GET /v1/models` returns only what the caller is authorized to use.
 
 ## 6. Observability
@@ -175,7 +175,7 @@ internal/glob, ids, version  ✓ small utilities
 internal/inspect/          ✓ detectors, findings, fail-closed engine (classification: M2)
 internal/policy/           · YAML + CEL evaluation, decision records (M2)
 internal/quota/            · admission, reserve/settle, counters (M2)
-internal/audit/            · decision records, hash chain, encryption (M2/M4)
+internal/audit/            ✓ decision records and reason codes (hash chain: M2; encryption: M4)
 internal/admin/            · control-plane API (M3)
 internal/store/            ✓ PostgreSQL access (pgx): embedded migrations, outbox, config revisions
 internal/spool/            ✓ bounded on-disk queue for events while PostgreSQL is down

@@ -30,6 +30,12 @@ info:
     - **Unknown request fields are passed through** to the backend untouched.
     - Every response carries an `X-Request-Id` header. Send your own
       `X-Request-Id` to correlate; it is kept if it is a plain identifier.
+    - Every chat request from an authenticated caller leaves a **decision
+      record** in the audit trail, refused requests included. Its identifier is
+      in the `X-Tavian-Decision-Id` header, and in `error.decision_id` when the
+      request is refused: quote it to your administrator to learn why. Requests
+      refused before the caller is known (bad credentials, gateway overloaded)
+      have none.
 
     Prompts and completions are never written to Tavian's logs or usage events.
 
@@ -127,6 +133,7 @@ paths:
           description: The completion, or a stream of chunks.
           headers:
             X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            X-Tavian-Decision-Id: { $ref: "#/components/headers/DecisionId" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ChatCompletion" }
@@ -206,6 +213,9 @@ components:
   headers:
     RequestId:
       description: Identifier of this request, also present in Tavian's logs and usage events.
+      schema: { type: string }
+    DecisionId:
+      description: Identifier of the decision record explaining what the gateway decided about this request.
       schema: { type: string }
   schemas:
     ModelList:
@@ -325,6 +335,9 @@ components:
               type: string
               description: Stable machine-readable code.
             param: { type: [string, "null"] }
+            decision_id:
+              type: string
+              description: The decision record that explains this refusal (also in the `X-Tavian-Decision-Id` header). Absent when the caller was not authenticated.
   responses:
     InvalidRequest:
       description: |
