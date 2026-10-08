@@ -39,7 +39,8 @@ info:
 
     - a **Tavian API key** (`tav_...`) for applications. The operator issues
       it (`tavian keygen` produces one and the hash to put in the
-      configuration);
+      configuration) and may give it an expiry date, after which it is refused
+      like any invalid credential;
     - an **OIDC access token** from the organisation's identity provider, when
       the operator has enabled it. The token must be a signed JWT for Tavian's
       audience; its groups decide the team and the models. Tokens are checked

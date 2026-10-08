@@ -58,6 +58,10 @@ const (
 	LabelRestricted   Classification = "restricted"
 )
 
+// DefaultClearance is the label an application or group is cleared for when
+// the configuration says nothing: raising it is a decision to write down.
+const DefaultClearance = LabelInternal
+
 // Rank returns the position of c in the default scheme, or -1 if unknown.
 func (c Classification) Rank() int {
 	switch c {
@@ -174,6 +178,10 @@ type OIDCMapping struct {
 	Group         string   `yaml:"group"`
 	Team          string   `yaml:"team"`
 	AllowedModels []string `yaml:"allowed_models"`
+	// MaxClassification is the clearance this group grants (default
+	// internal). Like models, clearances add up: a person gets the highest of
+	// their groups.
+	MaxClassification Classification `yaml:"max_classification"`
 }
 
 // DocsConfig controls the API reference served by the data plane.
@@ -253,6 +261,12 @@ type APIKey struct {
 	Team          string   `yaml:"team"`
 	Application   string   `yaml:"application"`
 	AllowedModels []string `yaml:"allowed_models"` // '*' wildcard; empty list allows nothing
+	// ExpiresAt is the instant from which the key is refused (RFC 3339, or a
+	// plain date meaning 00:00 UTC). Zero: the key does not expire.
+	ExpiresAt time.Time `yaml:"expires_at"`
+	// MaxClassification is the most sensitive label of data this application
+	// is cleared to send (default internal). Enforced by the content policy.
+	MaxClassification Classification `yaml:"max_classification"`
 }
 
 // Load reads and parses the configuration file, returning the raw bytes too
@@ -330,6 +344,16 @@ func (c *Config) applyDefaults() {
 		}
 		if c.OIDC.Claims.Application == "" {
 			c.OIDC.Claims.Application = "azp"
+		}
+	}
+	for i := range c.APIKeys {
+		if c.APIKeys[i].MaxClassification == "" {
+			c.APIKeys[i].MaxClassification = DefaultClearance
+		}
+	}
+	for i := range c.OIDC.Mappings {
+		if c.OIDC.Mappings[i].MaxClassification == "" {
+			c.OIDC.Mappings[i].MaxClassification = DefaultClearance
 		}
 	}
 	if c.Database.SpoolDir == "" {

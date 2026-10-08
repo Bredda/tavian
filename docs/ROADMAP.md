@@ -51,7 +51,7 @@ Gaps found when comparing [SECURITY.md](SECURITY.md) with the code, closed first
 
 - [x] PostgreSQL connections go through the egress guard; a lint rule forbids other direct dialing
 - [x] In-flight request cap (`limits.max_inflight`)
-- [ ] API key lifecycle: `expires_at`, per-key and per-mapping `max_classification` (needed by classification in M2), rotation procedure
+- [x] API key lifecycle: `expires_at`, per-key and per-mapping `max_classification` (needed by classification in M2), rotation procedure ([API_KEYS.md](API_KEYS.md))
 
 ## M2 — The finance demo ("prove it")
 

@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const validYAML = `
@@ -364,5 +365,96 @@ func TestMaxInflight(t *testing.T) {
 	bad, _ := Parse([]byte("profile: air-gapped\nlimits: {max_inflight: -1}\n"))
 	if _, err := Compile(bad, nil, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "max_inflight") {
 		t.Errorf("negative max_inflight accepted: %v", err)
+	}
+}
+
+func compileKeys(t *testing.T, keysYAML string) (*Snapshot, error) {
+	t.Helper()
+	y := "profile: air-gapped\napi_keys:\n" + keysYAML
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Compile(cfg, []byte(y), func(string) string { return "" })
+}
+
+const hashA = "sha256:" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const hashB = "sha256:" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+func TestKeyExpiryAndClearanceParsing(t *testing.T) {
+	s, err := compileKeys(t, `  - {id: dated, hash: `+hashA+`, allowed_models: ["*"], expires_at: 2027-03-01}
+  - {id: precise, hash: `+hashB+`, allowed_models: ["*"], expires_at: "2027-03-01T10:00:00+02:00", max_classification: confidential}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]*APIKey{}
+	for _, k := range s.Keys {
+		byID[k.ID] = k
+	}
+	if want := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC); !byID["dated"].ExpiresAt.Equal(want) {
+		t.Errorf("a plain date means 00:00 UTC, got %v", byID["dated"].ExpiresAt)
+	}
+	if want := time.Date(2027, 3, 1, 8, 0, 0, 0, time.UTC); !byID["precise"].ExpiresAt.Equal(want) {
+		t.Errorf("RFC 3339 offset not honoured: %v", byID["precise"].ExpiresAt)
+	}
+	if byID["dated"].MaxClassification != LabelInternal || byID["precise"].MaxClassification != LabelConfidential {
+		t.Errorf("clearances: %q / %q", byID["dated"].MaxClassification, byID["precise"].MaxClassification)
+	}
+	if _, err := compileKeys(t, `  - {id: bad, hash: `+hashA+`, allowed_models: ["*"], max_classification: top-secret}
+`); err == nil || !strings.Contains(err.Error(), "max_classification") {
+		t.Errorf("unknown clearance accepted: %v", err)
+	}
+	cfg, err := Parse([]byte("profile: air-gapped\napi_keys:\n  - {id: bad, hash: x, expires_at: not-a-date}\n"))
+	if err == nil {
+		t.Errorf("a malformed expires_at must be a parse error, got %+v", cfg.APIKeys)
+	}
+}
+
+func TestExpiredKeysDoNotPreventStartup(t *testing.T) {
+	// A key that expired while the file stayed as it was must not take the
+	// gateway down on restart: it is refused at request time and named in the logs.
+	if _, err := compileKeys(t, `  - {id: old, hash: `+hashA+`, allowed_models: ["*"], expires_at: 2001-01-01}
+`); err != nil {
+		t.Errorf("an expired key made the configuration invalid: %v", err)
+	}
+}
+
+func TestOIDCMappingClearance(t *testing.T) {
+	y := oidcYAML(`  mappings:
+    - {group: a, team: t, allowed_models: [m]}
+    - {group: b, team: t, allowed_models: [m], max_classification: restricted}
+`)
+	s, err := compileOIDCYAML(t, y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []Classification{s.OIDC.Mappings[0].MaxClassification, s.OIDC.Mappings[1].MaxClassification}; got[0] != LabelInternal || got[1] != LabelRestricted {
+		t.Errorf("clearances = %v", got)
+	}
+	bad := oidcYAML("  mappings:\n    - {group: a, team: t, allowed_models: [m], max_classification: nope}\n")
+	if _, err := compileOIDCYAML(t, bad); err == nil || !strings.Contains(err.Error(), "max_classification") {
+		t.Errorf("unknown clearance accepted: %v", err)
+	}
+}
+
+func TestKeyExpiries(t *testing.T) {
+	now := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	s := &Snapshot{Keys: map[string]*APIKey{
+		"1": {ID: "never"},
+		"2": {ID: "gone", ExpiresAt: now.Add(-time.Hour)},
+		"3": {ID: "at-the-instant", ExpiresAt: now},
+		"4": {ID: "soon", ExpiresAt: now.Add(48 * time.Hour)},
+		"5": {ID: "later", ExpiresAt: now.Add(90 * 24 * time.Hour)},
+	}}
+	e := s.KeyExpiries(now, 14*24*time.Hour)
+	if strings.Join(e.Expired, ",") != "at-the-instant,gone" || strings.Join(e.Soon, ",") != "soon" {
+		t.Errorf("expired %v soon %v", e.Expired, e.Soon)
+	}
+	if !e.HasNext || e.Next != 48*time.Hour {
+		t.Errorf("next = %v (%v)", e.Next, e.HasNext)
+	}
+	if none := (&Snapshot{Keys: map[string]*APIKey{"1": {ID: "never"}}}).KeyExpiries(now, time.Hour); none.HasNext || len(none.Expired) != 0 {
+		t.Errorf("no expiring key: %+v", none)
 	}
 }

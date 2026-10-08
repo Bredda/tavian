@@ -179,6 +179,8 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	metrics := server.NewMetrics()
+	metrics.WatchAPIKeys(holder, time.Now)
+	logKeyExpiries(log, snap, time.Now())
 	var authn auth.Authenticator = auth.APIKeyAuthenticator{Snap: holder}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -378,8 +380,25 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 		return
 	}
 	holder.Store(snap)
+	logKeyExpiries(log, snap, time.Now())
 	log.Info("configuration reloaded", "revision", snap.Revision,
 		"backends", len(snap.Backends), "models", len(snap.Models))
+}
+
+// keyExpiryWarning is how far ahead keys that are about to expire are named in
+// the logs.
+const keyExpiryWarning = 14 * 24 * time.Hour
+
+// logKeyExpiries names the API keys that have expired or will soon, at startup
+// and on each reload; the metrics only count them.
+func logKeyExpiries(log *slog.Logger, snap *config.Snapshot, now time.Time) {
+	e := snap.KeyExpiries(now, keyExpiryWarning)
+	if len(e.Expired) > 0 {
+		log.Warn("API keys past their expires_at are refused", "keys", e.Expired)
+	}
+	if len(e.Soon) > 0 {
+		log.Warn("API keys expire within 14 days", "keys", e.Soon)
+	}
 }
 
 // sameOIDCConnection compares everything about the OIDC setup that is fixed at

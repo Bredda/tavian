@@ -45,6 +45,7 @@ log:
 #     - group: ai-research        # (first matching mapping names the team; models add up)
 #       team: research
 #       allowed_models: ["llama-*"]
+#       # max_classification: internal  # clearance of this group (default internal); the highest of a person's groups applies
 
 # API reference (Scalar) at /docs and the OpenAPI description at /openapi.yaml,
 # served on the data port without authentication. Both are embedded in the
@@ -98,3 +99,5 @@ api_keys:
     team: research
     application: notebook
     allowed_models: ["llama-*"]           # '*' wildcard; an empty list is invalid
+    # expires_at: 2027-03-01              # refused from that instant (RFC 3339 or a date = 00:00 UTC); see docs/API_KEYS.md
+    # max_classification: internal        # most sensitive data label this app may send (default internal)

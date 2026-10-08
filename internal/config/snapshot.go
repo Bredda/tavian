@@ -211,6 +211,9 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		if len(k.AllowedModels) == 0 {
 			addf("%s: allowed_models must list at least one pattern (an empty list would allow nothing)", where)
 		}
+		if k.MaxClassification.Rank() < 0 {
+			addf("%s: unknown max_classification %q", where, k.MaxClassification)
+		}
 		s.Keys[h] = &k
 	}
 
@@ -218,6 +221,41 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		return nil, fmt.Errorf("invalid configuration:\n%w", errors.Join(errs...))
 	}
 	return s, nil
+}
+
+// KeyExpiry summarises which API keys have expired or are about to.
+type KeyExpiry struct {
+	// Expired and Soon hold key ids, sorted.
+	Expired, Soon []string
+	// Next is the time until the nearest expiry among keys not yet expired;
+	// HasNext is false when no such key exists.
+	Next    time.Duration
+	HasNext bool
+}
+
+// KeyExpiries reports expired keys, keys expiring within soonWithin, and the
+// nearest upcoming expiry, as of now.
+func (s *Snapshot) KeyExpiries(now time.Time, soonWithin time.Duration) KeyExpiry {
+	var out KeyExpiry
+	for _, k := range s.Keys {
+		if k.ExpiresAt.IsZero() {
+			continue
+		}
+		left := k.ExpiresAt.Sub(now)
+		if left <= 0 {
+			out.Expired = append(out.Expired, k.ID)
+			continue
+		}
+		if left <= soonWithin {
+			out.Soon = append(out.Soon, k.ID)
+		}
+		if !out.HasNext || left < out.Next {
+			out.Next, out.HasNext = left, true
+		}
+	}
+	sort.Strings(out.Expired)
+	sort.Strings(out.Soon)
+	return out
 }
 
 // Holder publishes the current Snapshot to the data plane. Swaps are atomic;
