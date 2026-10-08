@@ -1,0 +1,27 @@
+# Rules for one team. A policy for a narrower scope can only narrow what the
+# wider ones allow: it can take models and destinations away and raise labels,
+# never the other way round. `tavian validate` warns about lines that widen.
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata:
+  name: finance
+  description: Finance works with confidential data and nothing leaves the building
+spec:
+  scope: { team: finance }
+
+  models:
+    allow: ["llama-*", "mistral-*"]
+    deny: ["*-preview"]
+
+  # Even ordinary (internal) data from finance stays on internal destinations.
+  destinations:
+    internal: [internal]
+
+  classification:
+    # Everything finance sends is at least confidential.
+    default: confidential
+    infer:
+      # Many addresses in one request look like a customer list.
+      - id: customer-list
+        when: finding.subtype == "email" && finding.count >= 20
+        label: restricted

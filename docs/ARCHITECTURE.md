@@ -175,7 +175,7 @@ internal/docs/             ✓ embedded OpenAPI description + Scalar viewer serv
 internal/mockllm/          ✓ mock backend implementation
 internal/glob, ids, version  ✓ small utilities
 internal/inspect/          ✓ detectors, findings, fail-closed engine (classification: M2)
-internal/policy/           · YAML + CEL evaluation, decision records (M2)
+internal/policy/           ✓ YAML + CEL evaluation, baseline policy, scopes (actions, shadow and `policy test`: M2)
 internal/quota/            · admission, reserve/settle, counters (M2)
 internal/audit/            ✓ decision records and reason codes (hash chain: M2; encryption: M4)
 internal/admin/            · control-plane API (M3)

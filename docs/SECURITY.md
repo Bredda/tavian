@@ -97,11 +97,11 @@ A caller can only raise the label, never lower it below what inspection infers.
 
 *In main after v0.1.0:* the label is computed for every authenticated chat request and recorded in the decision record with its three sources (and in the usage event and the `tavian_requests_by_label_total` metric).
 - **Declared:** the `X-Tavian-Classification` request header (`public`, `internal`, `confidential` or `restricted`; anything else is a 400). A declaration below what inspection infers, or below the default, changes nothing.
-- **Default:** `internal` for everyone. Per-team defaults come with the policy engine.
-- **Inferred**, by a built-in table that the policy engine will load from configuration: any secret → `restricted`; IBAN, payment card, French NIR → `confidential`. E-mail, phone, IP address and custom detectors do not raise the label on their own (the default `internal` already keeps them off public destinations). The inference uses every kind of finding seen, even when the detailed findings were cut at the per-request cap.
+- **Default:** `internal`, raised by any policy that sets a higher `classification.default` for the caller's scope ([POLICY.md](POLICY.md)).
+- **Inferred**, by the rules of the built-in baseline policy (to which your policies add): any secret → `restricted`; IBAN, payment card, French NIR → `confidential`. E-mail, phone, IP address and custom detectors do not raise the label on their own (the default `internal` already keeps them off public destinations). Your own policies add rules, for example to give a label to a custom dictionary. The inference uses every kind of finding seen, even when the detailed findings were cut at the per-request cap.
 - **Clearance:** a request whose label is above the caller's clearance (`max_classification` of the key or the person's groups, [API_KEYS.md](API_KEYS.md#clearance-max_classification)) is refused with 403 `classification_exceeds_clearance`, never silently lowered. The message names the label, never the content.
 
-**Routing enforces the label.** The policy turns the label into constraints: which destination classes may receive it. The built-in table (an organization guardrail in spirit, which the policy engine will load from configuration and let narrower scopes only restrict) is:
+**Routing enforces the label.** The policy turns the label into constraints: which destination classes may receive it. The built-in baseline policy sets the table below; policies for a team or an application can only remove entries from it:
 
 | Label | Destination classes allowed |
 |---|---|
@@ -112,7 +112,7 @@ A caller can only raise the label, never lower it below what inspection infers.
 
 Routing walks the targets of the requested model in order and takes the first backend that satisfies **both** its own `max_classification` (default: `restricted` for internal backends, `internal` for approved-external, `public` for public-external) **and** the table above. A model served by an external provider and by the on-prem backend therefore goes to the external one for ordinary data and to the on-prem one for an IBAN, even though the external one comes first. If no target is eligible the request is refused with 403 `no_eligible_backend`; the message names the label, never the content. The decision record lists the backends considered, in order, with why each one before the chosen one was set aside (`BACKEND_CLASSIFICATION_TOO_LOW`, `DESTINATION_CLASS_NOT_ALLOWED`).
 
-**Phase B.** After routing, an independent check recomputes the constraints from the label alone and asserts that the chosen backend satisfies them. A failure means a routing bug: the request is refused with 500 (`ROUTING_ASSERTION_FAILED`, recorded) rather than sent. Failover (M3) will only consider candidates that already passed the filter.
+**Phase B.** After routing, an independent check recomputes the constraints from the label and the policies and asserts that the chosen backend satisfies them. A failure means a routing bug: the request is refused with 500 (`ROUTING_ASSERTION_FAILED`, recorded) rather than sent. Failover (M3) will only consider candidates that already passed the filter.
 
 Backends declare `destination_class` and `max_classification`. A request may only be routed to a Backend with `max_classification ≥ label` whose destination class the policy allows for that label. Classification is thus enforced by *routing*, not by hoping each rule is written correctly.
 

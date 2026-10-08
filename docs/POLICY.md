@@ -1,6 +1,27 @@
 # Policy
 
-_Status: draft v0.1 — the schema below is illustrative, not final._
+_Status: draft v0.1. The schema below is the target; the next section says what the gateway implements today._
+
+## What is implemented
+
+*In main after v0.1.0*, policies are YAML files in a directory (`policy.dir` in `tavian.yaml`, relative to that file, reloaded with `SIGHUP`), each holding one or more `Policy` documents. The configuration revision covers the policy files, and each revision is stored with them, so a decision record's `config_revision` resolves to the exact rules that decided it. Existing deployments need `tavian migrate` once (migration 0002 adds the policy files to the stored revisions).
+
+The **built-in baseline** is itself a policy in this format (`internal/policy/baseline.yaml`): the default label `internal`, the `destinations` table, and the rules that give `secret.*` the label `restricted` and IBANs, payment cards and NIRs `confidential`. It always applies and is the floor: your policies are intersected with it and can only narrow.
+
+| Field | Status |
+|---|---|
+| `apiVersion: tavian/v1alpha1`, `kind: Policy`, `metadata.name` | required; names are unique across all files; `baseline` is reserved |
+| `spec.scope` | `organization: true`, or `team` and/or `application` (both must match). `user` is refused: it needs RBAC (M3) |
+| `spec.models.allow` / `deny` | implemented: a request is refused unless the credentials grant the model **and** every applicable policy with an allow list matches it **and** no applicable policy denies it |
+| `spec.destinations` | implemented: label -> destination classes; the allowed set is the intersection over the applicable policies. A class the baseline does not allow has no effect (`tavian validate` warns) |
+| `spec.classification.default` | implemented: the highest default among applicable policies |
+| `spec.classification.infer` | implemented: CEL rules over `finding.*`, `identity.*`, `request.*`; the label is the highest of the rules that match |
+| `spec.inspection` (`on_finding` actions, `redact`, `block`), `metadata.mode: shadow` | not yet: refused at load with a message |
+| `spec.quotas`, `spec.audit` | not yet: refused at load (quotas: M2 step 2.5; audit settings: 2.6 and M4) |
+
+Anything not implemented is **refused when the policy is loaded**, never ignored, because a policy that silently does less than it says is worse than none. `tavian validate -config tavian.yaml` loads and checks the policies and prints warnings.
+
+CEL conditions are type-checked when the policy is loaded, limited in size and cost, and evaluated once on a sample input, so a misspelled field (`finding.subtyp`) is an error at load time rather than at the first request that has a finding. A condition that fails on a real request (a division by zero, say) **fails the request closed** (`POLICY_ERROR`), naming the rule in the logs. Examples: [configs/policies/](../configs/policies/).
 
 ## Goals
 
@@ -26,6 +47,8 @@ Organization  →  Team  →  Application  →  User
 |---|---|---|---|
 | **A — constraints** | After inspection, before routing | Given identity, requested model, label, findings: what is permitted? | Allowed destination classes, required transforms, or a denial |
 | **B — assertion** | After routing, before the call | Does the chosen backend satisfy the constraints? | Pass, or refuse (indicates a routing bug) |
+
+Before phase A, **model authorization** looks only at the identity and the model, so a refused model costs no inspection time.
 
 Phase B is defence in depth: routing already filters on constraints, and this check ensures a bug there cannot leak data.
 
@@ -77,7 +100,7 @@ spec:
         - when: finding.type == "secret"
           action: block
           reason: SECRET_IN_PROMPT
-        - when: finding.type == "pii" && label >= "confidential"
+        - when: finding.type == "pii" && label.atLeast("confidential")
           action: restrict_destinations   # already implied by `destinations`, kept explicit
         - when: finding.subtype == "email"
           action: redact
@@ -125,8 +148,8 @@ Available variables in `when:`:
 |---|---|
 | `identity.*` | `user`, `groups`, `team`, `application`, `roles`, `auth_method` |
 | `request.*` | `model`, `type`, `stream`, `max_tokens`, `has_tools`, `has_multimodal` |
-| `finding.*` | `type`, `subtype`, `severity`, `confidence` (evaluated per finding) |
-| `label` | The effective classification label (ordered comparison supported) |
+| `finding.*` | `type`, `subtype`, `severity`, `confidence`, `count` (evaluated once per kind of finding: `confidence` and `severity` are the highest seen, `count` how many) |
+| `label` | The effective classification label, with `label.atLeast("confidential")` for ordered comparison (CEL compares strings alphabetically). *Not available in `infer` rules, which compute it; it arrives with `on_finding` actions.* |
 | `route.*` | `backend`, `destination_class`, `region` (phase B only) |
 | `time.*` | Time of day / weekday, for time-bound rules |
 

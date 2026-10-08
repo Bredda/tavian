@@ -2,6 +2,8 @@ package policy
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -467,5 +469,44 @@ spec:
 `)
 	if got := decide(t, e, Identity{Team: "finance"}, "").Label; got != taxonomy.Restricted {
 		t.Errorf("default label = %s: a team policy lowered the organization's default", got)
+	}
+}
+
+// The example policies shipped in configs/policies must stay valid.
+func TestExamplePoliciesCompile(t *testing.T) {
+	dir := "../../configs/policies"
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no examples in %s: %v", dir, err)
+	}
+	var src []Source
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		src = append(src, Source{Name: e.Name(), Raw: raw})
+	}
+	e, err := Compile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := e.Warnings(); len(w) != 0 {
+		t.Errorf("the examples should not widen anything: %v", w)
+	}
+	fin := Identity{Team: "finance"}
+	d := decide(t, e, fin, "")
+	if d.Label != taxonomy.Confidential || len(d.Constraints.Classes) != 1 {
+		t.Errorf("finance default: %+v", d)
+	}
+	list := inspect.Kind{Type: "pii", Subtype: "email", Severity: inspect.SeverityMedium, Confidence: 0.9, Count: 25}
+	if got := decide(t, e, fin, "", list).Label; got != taxonomy.Restricted {
+		t.Errorf("customer list: %s", got)
+	}
+	if got := decide(t, e, Identity{Team: "research"}, "", kind("custom", "codenames")).Label; got != taxonomy.Confidential {
+		t.Errorf("code names: %s", got)
+	}
+	if v := e.AuthorizeModel(fin, "gpt-4"); v.Allowed {
+		t.Error("finance may only use llama-* and mistral-*")
 	}
 }

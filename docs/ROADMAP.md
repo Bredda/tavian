@@ -75,7 +75,9 @@ Progress:
 - [x] Decision records for every authenticated request (refusals included), `decision_id` in the error body and `X-Tavian-Decision-Id`, stable reason codes, kind-aware outbox and spool ([SECURITY.md](SECURITY.md#audit))
 - [x] Classification: label from declared header, default and inferred findings, enforced against the caller's clearance, recorded in decision records, usage events and a metric
 - [x] Routing by constraints (backend `max_classification` and destination class per label), candidates in the decision record, phase B assertion, named mock backends and an approved-external mock in the demo stack
-- [ ] Policy engine (YAML + CEL), `tavian policy test`, shadow mode
+- [x] Policy engine, part 1: YAML policies in `policy.dir` with CEL conditions, scopes (organization, team, application), narrowing-only models/destinations/default label/label rules, built-in baseline in the same format, policies stored with each revision
+- [ ] Policy engine, part 2: actions on findings (`block`, `redact`, `restrict_destinations`, `flag`)
+- [ ] Policy engine, part 3: shadow mode, `tavian policy test`
 - [ ] Quotas (reserve/settle, in memory)
 - [ ] Outbox worker framework (consumer cursors, runner), hash chain over decision records, `tavian verify-audit`
 - [ ] Outbox retention (only sealed segments read by every consumer, seals kept) and a minimal hourly usage rollup, closing the M1 item on consumers and retention
