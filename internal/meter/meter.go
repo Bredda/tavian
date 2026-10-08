@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/bredda/tavian/internal/inspect"
 )
 
 // UsageEvent describes one served request. It never carries prompt or response
@@ -45,9 +47,14 @@ type UsageEvent struct {
 	EnergyWh     *float64 `json:"energy_wh,omitempty"`
 	CO2eGrams    *float64 `json:"co2e_g,omitempty"`
 
+	// Inspection summarises what content inspection found: counts and detector
+	// versions, never content or fingerprints. Nil only for events written
+	// before inspection existed.
+	Inspection *inspect.Summary `json:"inspection,omitempty"`
+
 	Streamed  bool   `json:"streamed"`
 	Status    int    `json:"status"`
-	Outcome   string `json:"outcome"` // ok | upstream_error | stream_error | client_gone
+	Outcome   string `json:"outcome"` // ok | upstream_error | stream_error | client_gone | inspection_blocked
 	LatencyMS int64  `json:"latency_ms"`
 	TTFBMS    int64  `json:"ttfb_ms"`
 }

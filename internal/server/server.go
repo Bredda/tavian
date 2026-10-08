@@ -21,6 +21,7 @@ import (
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/docs"
 	"github.com/bredda/tavian/internal/ids"
+	"github.com/bredda/tavian/internal/inspect"
 	"github.com/bredda/tavian/internal/meter"
 	"github.com/bredda/tavian/internal/provider/openai"
 	"github.com/bredda/tavian/internal/router"
@@ -172,7 +173,31 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return "denied_model"
 	}
 
-	// TODO(M2): inspect request content -> findings + classification label.
+	// inspect (fail closed: a request that cannot be inspected is not served)
+	creq, err := openai.ExtractChat(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
+		return "invalid_request"
+	}
+	inspection, ierr := snap.Inspector.Inspect(ctx, creq)
+	s.Metrics.observeInspection(inspection)
+	summary := inspection.Summary()
+	if ierr != nil {
+		code := inspect.CodeOf(ierr)
+		status := http.StatusBadRequest
+		typ, msg := "invalid_request_error", "the request contains content that cannot be inspected"
+		switch code {
+		case inspect.CodeFailed:
+			status, typ, msg = http.StatusServiceUnavailable, "server_error", "the request could not be inspected"
+			s.Log.ErrorContext(ctx, "inspection failed", "error", ierr)
+		case inspect.GapTooComplex:
+			msg = "the request is too complex to be inspected"
+		}
+		s.emit(ctx, s.event(ctx, snap, id, model, time.Now(), "inspection_blocked", status, &summary))
+		writeError(w, status, typ, code, msg)
+		return "inspection_blocked"
+	}
+
 	// TODO(M2): policy phase A -> constraints (allowed destinations, redactions).
 
 	// route
@@ -211,43 +236,54 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	}
 
 	// TODO(M2): quota settle with actual usage.
-	ev := meter.UsageEvent{
-		EventID:         ids.New(),
-		RequestID:       RequestID(ctx),
-		Time:            start.UTC(),
-		Revision:        snap.Revision,
-		AuthMethod:      id.Method,
-		KeyID:           id.KeyID,
-		UserID:          id.Subject,
-		Team:            id.Team,
-		Application:     id.Application,
-		Model:           model,
-		UpstreamModel:   route.UpstreamModel,
-		Backend:         route.Backend.ID,
-		InputTokens:     res.Usage.Input,
-		OutputTokens:    res.Usage.Output,
-		CachedTokens:    res.Usage.Cached,
-		ReasoningTokens: res.Usage.Reasoning,
-		UsageKnown:      res.Usage.Known,
-		Streamed:        res.Streamed,
-		Status:          res.Status,
-		Outcome:         outcome,
-		LatencyMS:       time.Since(start).Milliseconds(),
-		TTFBMS:          res.TTFB.Milliseconds(),
+	ev := s.event(ctx, snap, id, model, start, outcome, res.Status, &summary)
+	ev.UpstreamModel = route.UpstreamModel
+	ev.Backend = route.Backend.ID
+	ev.InputTokens = res.Usage.Input
+	ev.OutputTokens = res.Usage.Output
+	ev.CachedTokens = res.Usage.Cached
+	ev.ReasoningTokens = res.Usage.Reasoning
+	ev.UsageKnown = res.Usage.Known
+	ev.Streamed = res.Streamed
+	ev.LatencyMS = time.Since(start).Milliseconds()
+	ev.TTFBMS = res.TTFB.Milliseconds()
+	s.emit(ctx, ev)
+	if res.Usage.Known {
+		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "input").Add(float64(res.Usage.Input))
+		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "output").Add(float64(res.Usage.Output))
 	}
-	// Detached from the request context: the client may be gone, the event is
-	// still owed.
+	return outcome
+}
+
+// event starts the usage event of a request with what is known before a
+// backend is involved.
+func (s *server) event(ctx context.Context, snap *config.Snapshot, id *auth.Identity, model string, at time.Time, outcome string, status int, ins *inspect.Summary) meter.UsageEvent {
+	return meter.UsageEvent{
+		EventID:     ids.New(),
+		RequestID:   RequestID(ctx),
+		Time:        at.UTC(),
+		Revision:    snap.Revision,
+		AuthMethod:  id.Method,
+		KeyID:       id.KeyID,
+		UserID:      id.Subject,
+		Team:        id.Team,
+		Application: id.Application,
+		Model:       model,
+		Inspection:  ins,
+		Status:      status,
+		Outcome:     outcome,
+	}
+}
+
+// emit records ev. It is detached from the request context: the client may be
+// gone, the event is still owed.
+func (s *server) emit(ctx context.Context, ev meter.UsageEvent) {
 	if err := s.Sink.Emit(context.WithoutCancel(ctx), ev); err != nil {
 		// Admit makes this rare; when it still happens the request is already
 		// served, so all that is left is to say loudly that an event is lost.
 		s.Metrics.eventsLost.Inc()
 		s.Log.ErrorContext(ctx, "usage event lost", "request_id", ev.RequestID, "error", err)
 	}
-	if res.Usage.Known {
-		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "input").Add(float64(res.Usage.Input))
-		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "output").Add(float64(res.Usage.Output))
-	}
-	return outcome
 }
 
 // --- middleware -------------------------------------------------------------

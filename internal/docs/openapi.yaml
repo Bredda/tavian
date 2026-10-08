@@ -329,7 +329,10 @@ components:
     InvalidRequest:
       description: |
         Malformed request: invalid JSON, a missing `model`, or a field of the
-        wrong type. Code `invalid_request`.
+        wrong type (code `invalid_request`). Also refused with 400: content the
+        gateway cannot inspect, namely images, audio, files or other non-text
+        content parts (`multimodal_not_inspectable`) and requests with too many
+        strings or too deep nesting (`request_too_complex`).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -375,7 +378,9 @@ components:
         The gateway is not ready (`not_ready`), cannot record the request
         right now (`audit_unavailable`), or is handling too many requests
         (`server_busy`, `limits.max_inflight`). Retry shortly; `Retry-After`
-        says when.
+        says when. Code `inspection_failed` means content inspection could not
+        complete (a detector failed or took longer than `inspection.budget`):
+        the request is refused rather than served uninspected.
       headers:
         Retry-After:
           schema: { type: integer }

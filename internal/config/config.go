@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/bredda/tavian/internal/inspect"
 )
 
 // Profile is the deployment profile (ARCHITECTURE.md §2, ADR-0008).
@@ -101,9 +103,12 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	Docs     DocsConfig     `yaml:"docs"`
 	OIDC     OIDCConfig     `yaml:"oidc"`
-	Backends []Backend      `yaml:"backends"`
-	Models   []Model        `yaml:"models"`
-	APIKeys  []APIKey       `yaml:"api_keys"`
+	// Inspection configures content inspection (SECURITY.md). It is on by
+	// default.
+	Inspection inspect.Config `yaml:"inspection"`
+	Backends   []Backend      `yaml:"backends"`
+	Models     []Model        `yaml:"models"`
+	APIKeys    []APIKey       `yaml:"api_keys"`
 }
 
 type ListenConfig struct {
@@ -320,6 +325,7 @@ func (c *Config) applyDefaults() {
 	if c.Limits.ShutdownGrace == 0 {
 		c.Limits.ShutdownGrace = 30 * time.Second
 	}
+	c.Inspection.ApplyDefaults()
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
