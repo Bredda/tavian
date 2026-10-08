@@ -53,7 +53,9 @@ Stateless-ish request path. Holds an immutable in-memory **config snapshot** (mo
 Admin API (and CLI, later UI). Validates and versions configuration, produces a new snapshot revision, publishes it. In the baseline it lives in the same binary as the data plane, behind a separate listener and separate authentication; the boundary is a package boundary now and can become a process boundary later ([ADR-0003](adr/0003-config-snapshots-and-plane-separation.md)).
 
 ### Egress guard
-The only code path that opens outbound connections. Resolves destinations against the configured backend list and the active profile, pins DNS results, enforces TLS (custom CA bundle supported), supports an outbound HTTP proxy. A request to anything not in the allow-list is a bug and is refused ([ADR-0008](adr/0008-single-egress-point-and-deployment-profiles.md)).
+The only code path that opens outbound connections: to model backends, to the identity provider and to PostgreSQL. It resolves destinations against the configured endpoints and the active profile, and refuses anything else; internal endpoints (every one under `air-gapped`, and the database always) must resolve to internal addresses, checked on every resolved address. A lint rule keeps other packages from dialing ([ADR-0008](adr/0008-single-egress-point-and-deployment-profiles.md)).
+
+*Implemented in v0.1.0:* the allow-list, profile enforcement, internal-address checks, no redirects, no proxy from the environment. *Planned:* DNS pinning, TLS enforcement with a custom CA bundle, an explicit outbound HTTP proxy, reference network policies.
 
 ### Inspection engine
 In-process pipeline of local detectors producing *findings* and a *classification label*. See [SECURITY.md](SECURITY.md#content-inspection).
@@ -66,7 +68,8 @@ Usage events and audit records are written to an **outbox table in PostgreSQL** 
 ```
  1  receive          assign request_id / trace_id, size and header limits
  2  authenticate     JWT (OIDC) or API key → Identity Context (user, groups, team, app)
- 3  admission        cheap checks first: RPM, concurrency → protects the expensive steps below
+ 3  admission        cheap checks first → protects the expensive steps below
+                    (today: in-flight cap `limits.max_inflight`; M2: RPM, concurrency per scope)
  4  authorize        RBAC: may this principal call this API and this model alias?
  5  normalize        parse into an internal request representation (messages, tools, params)
  6  inspect (req)    detectors → findings + classification label

@@ -19,6 +19,7 @@ Tavian depends only on **standard OIDC** (discovery, JWKS, standard claims, a co
 - Signing keys come from `jwks_uri` or discovery, always through the egress guard, so the IdP must be a declared endpoint with a destination class the profile allows. They are cached in memory and refreshed periodically; an unknown `kid` triggers one rate-limited re-fetch (rotation); while the IdP is unreachable cached keys are trusted up to `jwks_max_staleness`, then every token is refused (fail closed). Metric: `tavian_oidc_jwks_age_seconds`.
 - A provider that is down at startup is not fatal: tokens are refused, API keys keep working, and the fetch is retried with backoff.
 - Authorization is configured, not derived from the IdP: `mappings` turn group membership into a team and allowed models. A person in no mapped group is authenticated but can use no model. The first matching mapping (configuration order) names the team; allowed models of all matching mappings add up.
+- Each mapping also grants a clearance (`max_classification`, default `internal`); a person gets the highest clearance of their groups, like their allowed models add up. It is carried on the identity and enforced by the content policy in M2.
 - API keys and tokens coexist: `tav_`-prefixed credentials are API keys, anything else goes to OIDC. Usage events carry `auth_method` and `user_id` (the token's `sub`) instead of `key_id`.
 
 ## Alternatives considered

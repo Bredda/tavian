@@ -29,7 +29,7 @@ Organization (one per deployment, for now)
 | **User** | A human principal, identified by the IdP (`sub`). Created just-in-time from OIDC claims; never has a password in Tavian. |
 | **Team** | A group of users, mapped from IdP group claims and/or managed in Tavian. Unit of budget and policy. |
 | **Application** | A non-human consumer (service). Belongs to a team. Declares a **maximum classification** it is trusted to handle. |
-| **ApiKey** | Credential for an application (or user). Stored hashed, scoped, expirable, revocable, with a visible prefix for identification. |
+| **ApiKey** | Credential for an application (or user). Stored hashed (SHA-256 of a 256-bit random secret), scoped to models, optionally expiring, revocable by removal. The `tav_` prefix marks the secret type for scanners; the key is identified by its configured `id`. See [API_KEYS.md](API_KEYS.md). |
 | **IdentityContext** | Per-request, derived: user, groups, team, application, auth method. The input to every later decision. |
 | **Role** | RBAC role (`admin`, `security-admin`, `auditor`, `team-admin`, `user`, …). Admin roles are separated: the person who edits policy is not the person who can alter audit. |
 
