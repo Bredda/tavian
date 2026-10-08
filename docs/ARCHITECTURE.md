@@ -1,0 +1,183 @@
+# Architecture
+
+_Status: draft v0.1 — proposals, not commitments. Decisions are tracked in [adr/](adr/README.md)._
+
+## 1. Constraints that shape everything
+
+1. Must run fully on-prem and air-gapped. Nothing may be fetched from the Internet at runtime or install time (images, models, rulesets, updates are delivered as offline bundles).
+2. Must inspect request and response **content** locally.
+3. Security decisions fail closed.
+4. Operable with minimal moving parts: one binary + PostgreSQL as the baseline.
+
+## 2. Deployment profiles
+
+The profile is a top-level setting, validated at config load **and** enforced at the network dialer.
+
+| Profile | Egress | Backends allowed | Typical use |
+|---|---|---|---|
+| `air-gapped` | None. The dialer refuses any non-internal destination. | `internal` only | Strictest environments |
+| `controlled-egress` | Gateway only, to an explicit allow-list of hosts (optionally via a corporate proxy, custom CA). | `internal`, `approved-external` | Internal models + e.g. a EU-hosted provider |
+| `open-egress` | Gateway only, to configured hosts. | `internal`, `approved-external`, `public-external` | Labs, homelabs, non-regulated use |
+
+In every profile, **no component other than the gateway data plane** (IdP, database, dashboards, …) needs or is expected to have outbound access. Reference network policies ship with the deployment manifests.
+
+## 3. Logical components
+
+```
+                    OIDC IdP (Keycloak, Entra, …)
+                              │  JWKS / discovery (internal)
+                              ▼
+ AI clients ──────►  ┌──────────────────────────────────────────┐
+ (OpenAI SDK, apps)  │            Tavian — data plane           │
+                     │                                          │
+                     │  authn → admission → authz → inspect →   │ ──► internal backends
+                     │  policy → route → quota reserve →        │     (vLLM, llama.cpp, …)
+                     │  provider adapter → stream relay →       │
+                     │  quota settle → events                   │ ──► approved / public external
+                     │                                          │     (through the egress guard)
+                     └───────▲───────────────────────┬──────────┘
+                             │ config snapshot       │ events (transactional outbox)
+                     ┌───────┴──────────┐     ┌──────▼───────┐
+                     │  Control plane   │────►│  PostgreSQL  │  source of truth
+                     │  admin API / CLI │     └──────────────┘
+                     │  (UI later)      │
+                     └──────────────────┘
+
+ Optional, added when scale requires it:  Redis (shared counters) · OTel collector · Grafana · Prometheus
+```
+
+### Data plane
+Stateless-ish request path. Holds an immutable in-memory **config snapshot** (models, backends, policies, quotas, API key hashes, rulesets). Never queries PostgreSQL to serve a request.
+
+### Control plane
+Admin API (and CLI, later UI). Validates and versions configuration, produces a new snapshot revision, publishes it. In the baseline it lives in the same binary as the data plane, behind a separate listener and separate authentication; the boundary is a package boundary now and can become a process boundary later ([ADR-0003](adr/0003-config-snapshots-and-plane-separation.md)).
+
+### Egress guard
+The only code path that opens outbound connections. Resolves destinations against the configured backend list and the active profile, pins DNS results, enforces TLS (custom CA bundle supported), supports an outbound HTTP proxy. A request to anything not in the allow-list is a bug and is refused ([ADR-0008](adr/0008-single-egress-point-and-deployment-profiles.md)).
+
+### Inspection engine
+In-process pipeline of local detectors producing *findings* and a *classification label*. See [SECURITY.md](SECURITY.md#content-inspection).
+
+### Events
+Usage events and audit records are written to an **outbox table in PostgreSQL** in the same transaction domain as the decision log, then consumed by workers (aggregation, export, hash-chain sealing). No message broker in the baseline ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)).
+
+## 4. Request lifecycle
+
+```
+ 1  receive          assign request_id / trace_id, size and header limits
+ 2  authenticate     JWT (OIDC) or API key → Identity Context (user, groups, team, app)
+ 3  admission        cheap checks first: RPM, concurrency → protects the expensive steps below
+ 4  authorize        RBAC: may this principal call this API and this model alias?
+ 5  normalize        parse into an internal request representation (messages, tools, params)
+ 6  inspect (req)    detectors → findings + classification label
+ 7  policy (phase A) inputs: identity, model, label, findings → constraints:
+                       allowed destination classes, required transforms (redact), or deny
+ 8  transform        apply redactions if required
+ 9  route            model alias → candidate backends, filtered by constraints, health,
+                       capabilities, context window → strategy picks one
+10  policy (phase B) assertion: chosen backend satisfies constraints (defence in depth)
+11  quota reserve    TPM / tokens-per-day / budget reservation using estimated usage
+12  call provider    through the egress guard (internal backends use the same dialer path)
+13  relay response   stream pass-through; response inspection per policy (see below)
+14  quota settle     replace the reservation with actual usage (refund the difference)
+15  emit events      usage event + audit record via outbox (async consumers)
+```
+
+Notes:
+
+- **Admission before inspection** (step 3) prevents inspection CPU from becoming a DoS vector.
+- **Quota reservation after routing** (step 11) because cost depends on the chosen backend's price.
+- **Failover never widens constraints.** If the preferred backend fails, only other candidates that already passed the constraint filter are eligible.
+- Steps 2–10 produce a **decision record** (rules matched, findings, chosen backend, reasons) even for refused requests.
+
+### Streaming
+
+Responses are relayed token by token. Response inspection has three modes, set per policy:
+
+| Mode | Behavior | Trade-off |
+|---|---|---|
+| `off` | No response inspection | Fastest |
+| `observe` | Inspect asynchronously; findings are recorded, nothing is blocked | No added latency, no prevention |
+| `enforce` | Hold back a small sliding window (N tokens/chars) before releasing it to the client; on a finding, terminate the stream with an error event | Adds a bounded delay; cannot "un-send" what already left the window |
+
+Usage is extracted from the final chunk when the provider supplies it, otherwise counted locally.
+
+### Failure modes
+
+| Failure | Behavior |
+|---|---|
+| IdP / JWKS unreachable | Keep validating with cached keys up to a configurable max staleness; unknown `kid` → reject |
+| PostgreSQL unavailable | Data plane keeps serving from its snapshot; events spool to a bounded local disk queue; spool full → **reject** (audit cannot be guaranteed) |
+| Inspection error or timeout | **Block**, unless a specific non-critical detector is explicitly configured `on_error: allow` |
+| New config snapshot invalid | Keep last known good snapshot, raise an alert |
+| Quota store unavailable | Default **fail closed**; optional degraded mode with conservative local limits |
+| Backend fails before first byte | Fail over within the allowed candidate set |
+| Backend fails mid-stream | Terminate with an error event, no retry, settle partial usage |
+| Client disconnects | Cancel upstream, settle partial usage |
+| Audit spool full | Reject new requests (policies may relax this for non-audited traffic only) |
+
+## 5. API surface
+
+Compatibility with existing SDKs is a primary adoption driver.
+
+| Phase | Endpoints |
+|---|---|
+| First | `POST /v1/chat/completions` (incl. streaming, tool calls), `GET /v1/models` |
+| Next | `POST /v1/embeddings` |
+| Later | Anthropic-compatible `POST /v1/messages`, `POST /v1/rerank`, `POST /v1/responses` (stateful, costly to do right) |
+
+Rules:
+
+- The gateway **never fetches URLs found in prompts** (e.g. `image_url`). Multimodal parts are blocked or passed through by explicit policy; an inspection gap is declared, not hidden.
+- Error bodies follow the OpenAI error shape, extended with a stable `code` and a `decision_id` for support/audit correlation. They never echo detected sensitive values.
+- `GET /v1/models` returns only what the caller is authorized to use.
+
+## 6. Observability
+
+- **Tracing:** OpenTelemetry. One span per stage (`auth`, `admission`, `inspect`, `policy`, `route`, `quota`, `provider`). Attributes: `request_id`, `user_id`, `team_id`, `app_id`, `model`, `backend`, `decision`. **Never** prompt content.
+- **Metrics:** Prometheus, bounded cardinality (no user id as a label by default).
+- **Logs:** structured, content-free.
+- Telemetry exporters point at *internal* collectors only; the air-gapped profile refuses non-internal exporter endpoints.
+
+## 7. Persistence
+
+PostgreSQL is the source of truth for configuration, usage aggregates and audit. Hot counters (RPM, concurrency, rolling TPM) live in process memory in a single-instance deployment and move to Redis when running multiple replicas ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#state-and-scaling)).
+
+## 8. Proposed technology (open to challenge)
+
+| Concern | Choice | Why |
+|---|---|---|
+| Language | Go | Static single binary, strong net/http + streaming story, easy air-gapped delivery |
+| HTTP | `net/http` | Fewer dependencies, full control of streaming |
+| DB access | `pgx` + `sqlc`, versioned migrations | Typed queries, no ORM magic |
+| Policy conditions | CEL (`cel-go`) | Safe, non-Turing-complete, fast ([ADR-0006](adr/0006-policy-yaml-with-cel.md)) |
+| Regex | Go `regexp` (RE2) | Linear time: no ReDoS on attacker-controlled prompts |
+| Telemetry | OpenTelemetry SDK, Prometheus client | Standards |
+
+Package layout (✓ = present in the M1 skeleton, the rest are placeholders with a `doc.go` or planned):
+
+```
+cmd/tavian/                ✓ entrypoint: serve, validate, keygen, version (later: migrate, verify-audit, policy test)
+cmd/mockllm/               ✓ fake OpenAI-compatible backend for demos and tests
+internal/config/           ✓ strict YAML → validated, immutable Snapshot; profile rules; Holder
+internal/auth/             ✓ API keys + Identity (OIDC planned behind the same interface)
+internal/egress/           ✓ the only outbound dialer: allow-list + internal-address enforcement
+internal/router/           ✓ model → backend (first target; strategies and health later)
+internal/provider/openai/  ✓ OpenAI-compatible adapter: streaming relay + usage extraction
+internal/meter/            ✓ multi-dimensional UsageEvent + sinks (PostgreSQL outbox planned)
+internal/server/           ✓ data-plane and admin HTTP handlers, middleware, Prometheus metrics
+internal/mockllm/          ✓ mock backend implementation
+internal/glob, ids, version  ✓ small utilities
+internal/inspect/          · detectors, classification, findings (M2)
+internal/policy/           · YAML + CEL evaluation, decision records (M2)
+internal/quota/            · admission, reserve/settle, counters (M2)
+internal/audit/            · decision records, hash chain, encryption (M2/M4)
+internal/admin/            · control-plane API (M3)
+internal/store/            · PostgreSQL access and migrations (next M1 step)
+```
+
+## 9. Scaling path
+
+1. **Single instance** — one binary, PostgreSQL, in-memory counters. Enough for most small and medium deployments.
+2. **Multiple replicas** — shared counters in Redis (or PostgreSQL if throughput allows); snapshot distribution via PostgreSQL polling/notify.
+3. **HA / multi-cluster** — Kubernetes, PostgreSQL HA, per-site gateways with a replicated config, disaster-recovery runbooks, offline update bundles.
