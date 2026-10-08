@@ -38,9 +38,9 @@ Progress (skeleton merged = ✓):
 - [x] Compose demo on an Internet-less network (gateway + mock backend)
 - [x] PostgreSQL: embedded migrations (`tavian migrate`), usage events via transactional outbox ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)) with a bounded disk spool and fail-closed admission, every config revision persisted
 - [ ] Outbox consumers (rollups, export) and retention: events accumulate until they exist
-- [ ] Generic OIDC bearer validation (JWKS cache with max staleness) behind the `Authenticator` interface
+- [x] Generic OIDC bearer validation (JWKS cache with max staleness, group → team/model mappings) behind the `Authenticator` interface
 - [x] PostgreSQL in the compose stack
-- [ ] Keycloak in the compose stack
+- [x] Keycloak in the compose stack (realm `tavian`, users alice and bob)
 - [x] Conformance tests against the OpenAI SDKs (non-streaming, streaming, tool calls): `conformance/`, Python and Node, in CI
 
 ## M2 — The finance demo ("prove it")

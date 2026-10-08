@@ -23,6 +23,28 @@ log:
   level: info                  # debug | info | warn | error
   format: json                 # json | text
 
+# Sign-in with an OIDC provider (Keycloak, Entra ID, Okta, Authentik, Dex, ...):
+# applications and people present the provider's access token as a bearer
+# token, next to Tavian API keys. Tokens are verified locally against the
+# provider's signing keys, which Tavian fetches through the egress guard and
+# caches. Everything except `mappings` needs a restart to change.
+# oidc:
+#   issuer: https://idp.example.org/realms/tavian   # the tokens' "iss", exactly
+#   audience: tavian                                # required: tokens for other apps are refused
+#   destination_class: internal                     # how the egress guard treats the provider
+#   # jwks_uri: https://idp.internal/keys           # skip discovery (<issuer>/.well-known/openid-configuration)
+#   # jwks_refresh: 10m
+#   # jwks_max_staleness: 24h     # how long cached keys stay trusted while the provider is unreachable
+#   # clock_skew: 1m
+#   # algorithms: [RS256, PS256, ES256]             # asymmetric only
+#   claims:
+#     groups: groups              # a dotted path works: realm_access.roles
+#     application: azp
+#   mappings:                     # groups -> team and models. No match: signed in, but no model.
+#     - group: ai-research        # (first matching mapping names the team; models add up)
+#       team: research
+#       allowed_models: ["llama-*"]
+
 # API reference (Scalar) at /docs and the OpenAPI description at /openapi.yaml,
 # served on the data port without authentication. Both are embedded in the
 # binary and work offline. They describe the API only. Default: enabled.

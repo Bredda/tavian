@@ -3,6 +3,7 @@ module github.com/bredda/tavian
 go 1.26.0
 
 require (
+	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/prometheus/client_golang v1.24.1
 	gopkg.in/yaml.v3 v3.0.1

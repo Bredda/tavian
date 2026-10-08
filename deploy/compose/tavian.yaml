@@ -14,6 +14,18 @@ log:
 database:
   url_env: TAVIAN_DATABASE_URL
 
+# Sign in with the Keycloak of the demo stack (see README). `issuer` is the
+# name the tokens carry; the signing keys are fetched from inside the network.
+oidc:
+  issuer: http://localhost:8081/realms/tavian
+  audience: tavian
+  destination_class: internal
+  jwks_uri: http://keycloak:8080/realms/tavian/protocol/openid-connect/certs
+  mappings:
+    - group: ai-research
+      team: research
+      allowed_models: ["demo-*"]
+
 backends:
   - id: mockllm
     type: openai

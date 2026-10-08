@@ -250,3 +250,105 @@ func TestDatabaseSectionValidation(t *testing.T) {
 		t.Errorf("tiny spool accepted: %v", err)
 	}
 }
+
+func oidcYAML(extra string) string {
+	return `profile: air-gapped
+oidc:
+  issuer: http://keycloak.internal:8080/realms/tavian
+  audience: tavian
+  destination_class: internal
+` + extra
+}
+
+func compileOIDCYAML(t *testing.T, y string) (*Snapshot, error) {
+	t.Helper()
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Compile(cfg, []byte(y), func(string) string { return "" })
+}
+
+func TestOIDCCompiles(t *testing.T) {
+	s, err := compileOIDCYAML(t, oidcYAML(`  jwks_uri: http://keys.internal:9000/certs
+  claims: {groups: realm_access.roles}
+  mappings:
+    - {group: ai-research, team: research, allowed_models: ["llama-*"]}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With an explicit jwks_uri the issuer is only an identifier: no discovery,
+	// so only the keys' host is opened to the egress guard.
+	if s.Endpoints["keys.internal:9000"] != ClassInternal || len(s.Endpoints) != 1 {
+		t.Errorf("egress allow-list = %v", s.Endpoints)
+	}
+	d, err := compileOIDCYAML(t, oidcYAML(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Endpoints["keycloak.internal:8080"] != ClassInternal {
+		t.Errorf("discovery needs the issuer on the allow-list: %v", d.Endpoints)
+	}
+	o := s.OIDC
+	if o.Claims.Groups != "realm_access.roles" || o.Claims.Application != "azp" || o.ClockSkew == 0 ||
+		o.JWKSRefresh == 0 || o.JWKSMaxStaleness < o.JWKSRefresh || len(o.Algorithms) == 0 || len(o.Mappings) != 1 {
+		t.Errorf("settings / defaults = %+v", o)
+	}
+}
+
+func TestOIDCOffByDefault(t *testing.T) {
+	s, err := compileOIDCYAML(t, "profile: air-gapped\n")
+	if err != nil || s.OIDC.Issuer != "" {
+		t.Errorf("err=%v issuer=%q", err, s.OIDC.Issuer)
+	}
+}
+
+func TestOIDCValidation(t *testing.T) {
+	base := "profile: air-gapped\noidc:\n"
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"audience required": {
+			base + "  issuer: http://k.internal/r\n  destination_class: internal\n", "audience"},
+		"class required": {
+			base + "  issuer: http://k.internal/r\n  audience: a\n", "destination_class"},
+		"settings without issuer": {
+			base + "  audience: a\n", "issuer is required"},
+		"profile forbids the class": {
+			"profile: air-gapped\noidc:\n  issuer: https://login.example/r\n  audience: a\n  destination_class: approved-external\n", "not allowed by profile"},
+		"plain http only for internal": {
+			"profile: controlled-egress\noidc:\n  issuer: http://login.example/r\n  audience: a\n  destination_class: approved-external\n", "https"},
+		"symmetric algorithms refused": {
+			oidcYAML("  algorithms: [HS256]\n"), "HS256"},
+		"staleness shorter than refresh": {
+			oidcYAML("  jwks_refresh: 1h\n  jwks_max_staleness: 10m\n"), "jwks_max_staleness"},
+		"mapping without models": {
+			oidcYAML("  mappings:\n    - {group: g, team: t}\n"), "allowed_models"},
+		"mapping with a bad team": {
+			oidcYAML("  mappings:\n    - {group: g, team: 'Not A Slug', allowed_models: [m]}\n"), "team"},
+		"group mapped twice": {
+			oidcYAML("  mappings:\n    - {group: g, team: a, allowed_models: [m]}\n    - {group: g, team: b, allowed_models: [m]}\n"), "twice"},
+		"jwks uri with credentials": {
+			oidcYAML("  jwks_uri: http://u:p@k.internal/certs\n"), "credentials"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := compileOIDCYAML(t, tc.yaml)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestOIDCEndpointCannotChangeClassOfABackend(t *testing.T) {
+	y := `profile: controlled-egress
+oidc:
+  issuer: https://login.example/r
+  audience: a
+  destination_class: approved-external
+backends:
+  - {id: b, type: openai, base_url: "https://login.example/v1", destination_class: internal}
+`
+	if _, err := compileOIDCYAML(t, y); err == nil || !strings.Contains(err.Error(), "already declared") {
+		t.Errorf("err = %v", err)
+	}
+}

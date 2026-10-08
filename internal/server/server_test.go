@@ -36,7 +36,7 @@ func newFixture(t *testing.T, maxBody int64) *fixture {
 }
 
 // newFixtureSink lets a test wrap the in-memory sink, e.g. to refuse requests.
-func newFixtureSink(t *testing.T, maxBody int64, wrap func(*meter.MemorySink) meter.Sink) *fixture {
+func newFixtureSink(t *testing.T, maxBody int64, wrap func(*meter.MemorySink) meter.Sink, opts ...func(*Deps)) *fixture {
 	t.Helper()
 	llm := httptest.NewServer(mockllm.Handler())
 	t.Cleanup(llm.Close)
@@ -98,14 +98,18 @@ api_keys:
 	sink := &meter.MemorySink{}
 	log := slog.New(slog.DiscardHandler)
 	m := NewMetrics()
-	gw := httptest.NewServer(NewDataHandler(Deps{
+	deps := Deps{
 		Snap:     holder,
 		Auth:     auth.APIKeyAuthenticator{Snap: holder},
 		Provider: openai.New(guard.HTTPClient(snap.Limits.UpstreamHeaderTimeout), "tavian/test"),
 		Sink:     sinkFor(sink, wrap),
 		Log:      log,
 		Metrics:  m,
-	}))
+	}
+	for _, o := range opts {
+		o(&deps)
+	}
+	gw := httptest.NewServer(NewDataHandler(deps))
 	t.Cleanup(gw.Close)
 	admin := httptest.NewServer(NewAdminHandler(holder, m, nil))
 	t.Cleanup(admin.Close)
@@ -512,5 +516,41 @@ func TestDocsServedByDefaultWithoutAuth(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("%s = %d, want 200", p, resp.StatusCode)
 		}
+	}
+}
+
+// stubAuth stands in for the OIDC authenticator: what matters here is how an
+// identity that came from a token ends up in the usage event.
+type stubAuth struct{ id *auth.Identity }
+
+func (s stubAuth) Authenticate(*http.Request) (*auth.Identity, error) { return s.id, nil }
+
+func TestUsageEventForAnOIDCIdentity(t *testing.T) {
+	id := &auth.Identity{Subject: "user-123", Team: "research", Application: "notebook", AllowedModels: []string{"llama-*"}, Method: "oidc"}
+	f := newFixtureSink(t, 1<<20, nil, func(d *Deps) { d.Auth = stubAuth{id} })
+
+	resp := f.post(t, "any-token", `{"model":"llama-70b","messages":[{"role":"user","content":"hi"}]}`)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	evs := f.sink.Events()
+	if len(evs) != 1 {
+		t.Fatalf("events = %d", len(evs))
+	}
+	e := evs[0]
+	if e.AuthMethod != "oidc" || e.UserID != "user-123" || e.KeyID != "" || e.Team != "research" || e.Application != "notebook" {
+		t.Errorf("event = %+v", e)
+	}
+	raw, _ := json.Marshal(e)
+	if strings.Contains(string(raw), `"key_id"`) {
+		t.Errorf("an OIDC event must not carry an empty key_id: %s", raw)
+	}
+
+	// The same person may not use a model their groups do not grant.
+	resp = f.post(t, "any-token", `{"model":"broken","messages":[]}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status for a model outside the mapped access = %d, want 403", resp.StatusCode)
 	}
 }

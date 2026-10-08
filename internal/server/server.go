@@ -97,6 +97,7 @@ func (s *server) models(w http.ResponseWriter, r *http.Request) string {
 	}
 	id, err := s.Auth.Authenticate(r)
 	if err != nil {
+		s.Log.InfoContext(r.Context(), "authentication failed", "reason", auth.Reason(err))
 		unauthorized(w)
 		return "unauthenticated"
 	}
@@ -124,6 +125,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	// authenticate
 	id, err := s.Auth.Authenticate(r)
 	if err != nil {
+		s.Log.InfoContext(r.Context(), "authentication failed", "reason", auth.Reason(err))
 		unauthorized(w)
 		return "unauthenticated"
 	}
@@ -161,7 +163,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 
 	// authorize
 	if !id.CanUseModel(model) {
-		writeError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed", "this key may not use the requested model")
+		writeError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed", "you may not use the requested model")
 		return "denied_model"
 	}
 
@@ -209,7 +211,9 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		RequestID:       RequestID(ctx),
 		Time:            start.UTC(),
 		Revision:        snap.Revision,
+		AuthMethod:      id.Method,
 		KeyID:           id.KeyID,
+		UserID:          id.Subject,
 		Team:            id.Team,
 		Application:     id.Application,
 		Model:           model,
@@ -332,7 +336,7 @@ func (s *server) accessLog(next http.Handler) http.Handler {
 
 func unauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="tavian"`)
-	writeError(w, http.StatusUnauthorized, "invalid_request_error", "invalid_api_key", "missing or invalid API key")
+	writeError(w, http.StatusUnauthorized, "invalid_request_error", "invalid_api_key", "missing or invalid credentials (API key or access token)")
 }
 
 // writeError sends an OpenAI-shaped error body. Messages never echo request

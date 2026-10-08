@@ -160,7 +160,7 @@ Package layout (✓ = present in the M1 skeleton, the rest are placeholders with
 cmd/tavian/                ✓ entrypoint: serve, validate, migrate, keygen, version (later: verify-audit, policy test)
 cmd/mockllm/               ✓ fake OpenAI-compatible backend for demos and tests
 internal/config/           ✓ strict YAML → validated, immutable Snapshot; profile rules; Holder
-internal/auth/             ✓ API keys + Identity (OIDC planned behind the same interface)
+internal/auth/             ✓ API keys and OIDC access tokens (JWKS cache) → Identity
 internal/egress/           ✓ the only outbound dialer: allow-list + internal-address enforcement
 internal/router/           ✓ model → backend (first target; strategies and health later)
 internal/provider/openai/  ✓ OpenAI-compatible adapter: streaming relay + usage extraction

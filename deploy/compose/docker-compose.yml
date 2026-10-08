@@ -9,7 +9,7 @@
 # refuses every connection that is not a configured backend (egress guard).
 # In production, enforce this with network policies / firewall rules too.
 #
-# The database password below is for this demo only.
+# Passwords and keys in this file and in keycloak/ are for this demo only.
 name: tavian-demo
 
 x-database-url: &database-url
@@ -31,6 +31,37 @@ services:
       timeout: 3s
       retries: 30
     security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  # Reference identity provider (ADR-0002); Tavian only needs standard OIDC.
+  # Realm "tavian": users alice (group ai-research) and bob (no group),
+  # password = user name. Dev mode, demo only.
+  #
+  # The browser-facing URL (http://localhost:8081) is what ends up in the tokens'
+  # issuer; the gateway fetches the signing keys over the internal network.
+  # Keycloak joins `publish` only so that its port can be published on the host;
+  # a real deployment runs the IdP elsewhere.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./keycloak/tavian-realm.json:/opt/keycloak/data/import/tavian-realm.json:ro
+    ports:
+      - "127.0.0.1:8081:8080"
+    networks: [backplane, publish]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /realms/tavian HTTP/1.0\r\n\r\n' >&3 && head -n1 <&3 | grep -q 200"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
     restart: unless-stopped
 
   # One-shot: applies the database migrations, then exits.

@@ -22,6 +22,9 @@ type Snapshot struct {
 	LoadedAt time.Time
 	Profile  Profile
 	Limits   LimitsConfig
+	// OIDC is the identity-provider configuration; Mappings in it are what a
+	// reload may change. Zero value (empty Issuer) means OIDC is off.
+	OIDC OIDCConfig
 	// DocsEnabled says whether the API reference is served.
 	DocsEnabled bool
 
@@ -84,6 +87,13 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		Models:      map[string]*Model{},
 		Keys:        map[string]*APIKey{},
 		Endpoints:   map[string]DestinationClass{},
+	}
+
+	s.OIDC = cfg.OIDC
+	if cfg.OIDC.Issuer != "" {
+		compileOIDC(cfg, s, addf)
+	} else if cfg.OIDC.Audience != "" || cfg.OIDC.JWKSURI != "" || len(cfg.OIDC.Mappings) > 0 {
+		addf("oidc: issuer is required when any other oidc setting is present")
 	}
 
 	for i := range cfg.Backends {

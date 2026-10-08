@@ -79,7 +79,7 @@ func (g *Guard) DialContext(ctx context.Context, network, addr string) (net.Conn
 	}
 	class, ok := s.Endpoints[key]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s is not a configured backend endpoint", ErrDestinationNotAllowed, key)
+		return nil, fmt.Errorf("%w: %s is not a configured endpoint (backend or identity provider)", ErrDestinationNotAllowed, key)
 	}
 
 	var ips []net.IP

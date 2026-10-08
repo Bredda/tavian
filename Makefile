@@ -62,6 +62,12 @@ demo: ## Start the demo stack (gateway + mock backend) on localhost:8080
 	$(COMPOSE) up --build -d
 	@echo "Try: curl -s localhost:8080/v1/models -H 'Authorization: Bearer tav_VavQsTNlrxWVesBv7GinuMLhYBbmhns_YNloIcWS3UI'"
 
+.PHONY: demo-token
+demo-token: ## Print an access token from the demo Keycloak (DEMO_USER=alice|bob)
+	@curl -sf localhost:8081/realms/tavian/protocol/openid-connect/token \
+		-d grant_type=password -d client_id=tavian-demo -d username=$(or $(DEMO_USER),alice) -d password=$(or $(DEMO_USER),alice) \
+		| sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p'
+
 .PHONY: demo-down
 demo-down: ## Stop the demo stack
 	$(COMPOSE) down
