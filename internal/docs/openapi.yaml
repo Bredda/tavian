@@ -19,9 +19,9 @@ info:
       may use; Tavian maps each to a backend and the backend's own model name,
       and puts your name back in the `model` field of the response (and of every
       streamed chunk), so you never see the backend's.
-    - **Keys carry an allow-list of models.** A key may only use the models it
-      was granted (`403 model_not_allowed` otherwise, and they are filtered out
-      of `/v1/models`).
+    - **Access is limited to granted models.** An API key carries a list of
+      models; a signed-in person gets the models of their groups. Anything else
+      is `403 model_not_allowed`, and is left out of `/v1/models`.
     - **Your key is never forwarded.** The backend is called with Tavian's own
       credential, if it needs one.
     - **Usage is always metered.** For streamed responses Tavian turns on
@@ -35,8 +35,17 @@ info:
 
     ## Authentication
 
-    `Authorization: Bearer <key>`. Keys are issued by the operator
-    (`tavian keygen` produces one and the hash to put in the configuration).
+    `Authorization: Bearer <credential>`, where the credential is either:
+
+    - a **Tavian API key** (`tav_...`) for applications. The operator issues
+      it (`tavian keygen` produces one and the hash to put in the
+      configuration);
+    - an **OIDC access token** from the organisation's identity provider, when
+      the operator has enabled it. The token must be a signed JWT for Tavian's
+      audience; its groups decide the team and the models. Tokens are checked
+      locally against the provider's cached signing keys, so a token stays
+      valid until it expires.
+
     Use the **Authentication** panel of this page to try requests.
 
     ## Operations endpoints
@@ -191,7 +200,8 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: A Tavian API key (`tav_...`).
+      bearerFormat: tav_… API key, or an OIDC access token (JWT)
+      description: A Tavian API key (`tav_...`) or an OIDC access token.
   headers:
     RequestId:
       description: Identifier of this request, also present in Tavian's logs and usage events.
@@ -325,7 +335,7 @@ components:
           example:
             error: { message: 'invalid request: missing "model"', type: invalid_request_error, code: invalid_request, param: null }
     Unauthorized:
-      description: Missing or invalid API key. Code `invalid_api_key`.
+      description: Missing or invalid credentials. Code `invalid_api_key` (the code is kept for SDK compatibility; it also covers access tokens).
       headers:
         WWW-Authenticate:
           schema: { type: string, example: Bearer realm="tavian" }
@@ -333,9 +343,9 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example:
-            error: { message: missing or invalid API key, type: invalid_request_error, code: invalid_api_key, param: null }
+            error: { message: missing or invalid credentials (API key or access token), type: invalid_request_error, code: invalid_api_key, param: null }
     ModelNotAllowed:
-      description: The key may not use this model. Code `model_not_allowed`.
+      description: The caller may not use this model. Code `model_not_allowed`.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

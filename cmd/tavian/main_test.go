@@ -121,3 +121,24 @@ api_keys:
 		t.Error("valid reload was not applied")
 	}
 }
+
+func TestSameOIDCConnectionIgnoresOnlyMappings(t *testing.T) {
+	base := config.OIDCConfig{Issuer: "https://idp/r", Audience: "a", Algorithms: []string{"RS256"}}
+	withMappings := base
+	withMappings.Mappings = []config.OIDCMapping{{Group: "g", Team: "t", AllowedModels: []string{"*"}}}
+	if !sameOIDCConnection(base, withMappings) {
+		t.Error("changing mappings must be allowed on reload")
+	}
+	for name, mut := range map[string]func(*config.OIDCConfig){
+		"issuer":     func(c *config.OIDCConfig) { c.Issuer = "https://other/r" },
+		"audience":   func(c *config.OIDCConfig) { c.Audience = "b" },
+		"algorithms": func(c *config.OIDCConfig) { c.Algorithms = []string{"RS256", "ES256"} },
+		"claims":     func(c *config.OIDCConfig) { c.Claims.Groups = "roles" },
+	} {
+		changed := base
+		mut(&changed)
+		if sameOIDCConnection(base, changed) {
+			t.Errorf("a change of %s must require a restart", name)
+		}
+	}
+}

@@ -29,9 +29,21 @@ make demo-down
 
 The key above is public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml).
 
+### Sign in with OIDC
+
+The demo stack also starts Keycloak (reference identity provider, realm `tavian`). `alice` is in the group `ai-research`, which the demo configuration maps to the team `research` and the `demo-*` models; `bob` is in no group. Passwords equal the user names.
+
+```bash
+TOKEN=$(make -s demo-token DEMO_USER=alice)
+curl -s localhost:8080/v1/models -H "Authorization: Bearer $TOKEN"   # lists demo-chat
+curl -s localhost:8080/v1/models -H "Authorization: Bearer $(make -s demo-token DEMO_USER=bob)"   # empty: authenticated, no access
+```
+
+Keycloak takes about 30 seconds to start; the gateway retries fetching its signing keys until it is up. Any OIDC provider works the same way, see the `oidc` section of the example configuration.
+
 ## What works today (M1 skeleton)
 
-API-key authentication with per-key model allow-lists · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection, policy, quotas and OIDC are next; see the [roadmap](docs/ROADMAP.md).
+API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection, policy and quotas are next; see the [roadmap](docs/ROADMAP.md).
 
 ## Development
 

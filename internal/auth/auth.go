@@ -1,5 +1,6 @@
-// Package auth turns an incoming request into an Identity. M1 supports API
-// keys; OIDC (ADR-0002) plugs in behind the same Authenticator interface.
+// Package auth turns an incoming request into an Identity: from a Tavian API
+// key, or from an OIDC access token issued by the organisation's identity
+// provider (ADR-0002). Both sit behind the Authenticator interface.
 package auth
 
 import (
@@ -17,16 +18,45 @@ import (
 )
 
 // ErrUnauthenticated is returned when no valid credential is presented. The
-// reason is deliberately not exposed to the caller.
+// error may carry a reason (see Reason) for the operator's logs; it is
+// deliberately never shown to the caller.
 var ErrUnauthenticated = errors.New("unauthenticated")
+
+// Reason returns the operator-facing explanation attached to an
+// authentication failure, if any.
+func Reason(err error) string {
+	msg := err.Error()
+	if rest, ok := strings.CutPrefix(msg, ErrUnauthenticated.Error()+": "); ok {
+		return rest
+	}
+	return ""
+}
+
+func unauthenticated(reason string) error {
+	return fmt.Errorf("%w: %s", ErrUnauthenticated, reason)
+}
+
+// bearer returns the token of an "Authorization: Bearer <token>" header.
+func bearer(r *http.Request) (string, bool) {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	token = strings.TrimSpace(token)
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return "", false
+	}
+	return token, true
+}
 
 // Identity is the authenticated principal, the input to every later decision.
 type Identity struct {
-	KeyID         string
+	// KeyID identifies the API key, when one was used.
+	KeyID string
+	// Subject is the identity provider's stable identifier of the person or
+	// service account, when a token was used.
+	Subject       string
 	Team          string
 	Application   string
 	AllowedModels []string
-	Method        string // "api_key"
+	Method        string // "api_key" | "oidc"
 }
 
 // CanUseModel reports whether the identity may request the named model.
@@ -48,13 +78,13 @@ func (a APIKeyAuthenticator) Authenticate(r *http.Request) (*Identity, error) {
 	if s == nil {
 		return nil, ErrUnauthenticated
 	}
-	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
-		return nil, ErrUnauthenticated
-	}
-	k, ok := s.Keys[HashKey(strings.TrimSpace(token))]
+	token, ok := bearer(r)
 	if !ok {
-		return nil, ErrUnauthenticated
+		return nil, unauthenticated("no bearer credential")
+	}
+	k, ok := s.Keys[HashKey(token)]
+	if !ok {
+		return nil, unauthenticated("unknown API key")
 	}
 	return &Identity{
 		KeyID:         k.ID,

@@ -20,7 +20,11 @@ type UsageEvent struct {
 	Time      time.Time `json:"time"`
 	Revision  string    `json:"config_revision"`
 
-	KeyID       string `json:"key_id"`
+	// Who: an API key, or a person/service account known to the identity
+	// provider (subject), never both.
+	AuthMethod  string `json:"auth_method"`
+	KeyID       string `json:"key_id,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
 	Team        string `json:"team"`
 	Application string `json:"application"`
 

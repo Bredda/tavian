@@ -75,3 +75,13 @@ func (m *Metrics) WatchStorage(up func() bool, spoolBytes func() int64) {
 		}, func() float64 { return float64(spoolBytes()) }),
 	)
 }
+
+// WatchOIDC exposes how old the identity provider's cached signing keys are
+// (-1 until the first fetch succeeds). Past oidc.jwks_max_staleness every
+// token is refused, so alert before that.
+func (m *Metrics) WatchOIDC(keysAgeSeconds func() float64) {
+	m.reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "tavian_oidc_jwks_age_seconds",
+		Help: "Age of the cached OIDC signing keys in seconds, -1 if none were fetched yet.",
+	}, keysAgeSeconds))
+}

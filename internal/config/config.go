@@ -96,6 +96,7 @@ type Config struct {
 	Egress   EgressConfig   `yaml:"egress"`
 	Database DatabaseConfig `yaml:"database"`
 	Docs     DocsConfig     `yaml:"docs"`
+	OIDC     OIDCConfig     `yaml:"oidc"`
 	Backends []Backend      `yaml:"backends"`
 	Models   []Model        `yaml:"models"`
 	APIKeys  []APIKey       `yaml:"api_keys"`
@@ -119,6 +120,56 @@ type LimitsConfig struct {
 type LogConfig struct {
 	Level  string `yaml:"level"`  // debug | info | warn | error
 	Format string `yaml:"format"` // json | text
+}
+
+// OIDCConfig enables bearer-token authentication of people and applications
+// through any standards-compliant identity provider (ADR-0002). Everything
+// except Mappings is fixed at startup; mappings follow configuration reloads.
+type OIDCConfig struct {
+	// Issuer is the exact value of the tokens' "iss" claim. Setting it turns
+	// OIDC on. It is also where discovery looks for the signing keys unless
+	// jwks_uri is given.
+	Issuer string `yaml:"issuer"`
+	// Audience must appear in the tokens' "aud" claim, so that a token issued
+	// to another application of the same provider is refused.
+	Audience string `yaml:"audience"`
+	// DestinationClass says where the provider runs; it decides whether the
+	// egress guard lets Tavian reach it under the deployment profile.
+	DestinationClass DestinationClass `yaml:"destination_class"`
+	// JWKSURI skips discovery and names the signing keys document directly.
+	// Without it, keys are found through <issuer>/.well-known/openid-configuration.
+	// The host it points to must be the issuer's or be declared here.
+	JWKSURI string `yaml:"jwks_uri"`
+	// JWKSRefresh is how often the signing keys are re-fetched.
+	JWKSRefresh time.Duration `yaml:"jwks_refresh"`
+	// JWKSMaxStaleness is how long cached keys keep being trusted when the
+	// provider cannot be reached. Past it every token is refused.
+	JWKSMaxStaleness time.Duration `yaml:"jwks_max_staleness"`
+	// ClockSkew is the tolerance applied to exp, nbf and iat.
+	ClockSkew time.Duration `yaml:"clock_skew"`
+	// Algorithms lists the accepted signature algorithms (asymmetric only).
+	Algorithms []string   `yaml:"algorithms"`
+	Claims     OIDCClaims `yaml:"claims"`
+	// Mappings turn group membership into a team and model access. A person
+	// matching no mapping is authenticated but may use no model.
+	Mappings []OIDCMapping `yaml:"mappings"`
+}
+
+// OIDCClaims names the claims Tavian reads.
+type OIDCClaims struct {
+	// Groups is the claim holding group or role names: a dotted path such as
+	// "realm_access.roles" is followed through nested objects; the value is a
+	// list of strings or a space-separated string. Default "groups".
+	Groups string `yaml:"groups"`
+	// Application is the claim naming the calling application. Default "azp".
+	Application string `yaml:"application"`
+}
+
+// OIDCMapping grants access to everyone in a group.
+type OIDCMapping struct {
+	Group         string   `yaml:"group"`
+	Team          string   `yaml:"team"`
+	AllowedModels []string `yaml:"allowed_models"`
 }
 
 // DocsConfig controls the API reference served by the data plane.
@@ -253,6 +304,26 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Log.Format == "" {
 		c.Log.Format = "json"
+	}
+	if c.OIDC.Issuer != "" {
+		if c.OIDC.JWKSRefresh == 0 {
+			c.OIDC.JWKSRefresh = 10 * time.Minute
+		}
+		if c.OIDC.JWKSMaxStaleness == 0 {
+			c.OIDC.JWKSMaxStaleness = 24 * time.Hour
+		}
+		if c.OIDC.ClockSkew == 0 {
+			c.OIDC.ClockSkew = time.Minute
+		}
+		if len(c.OIDC.Algorithms) == 0 {
+			c.OIDC.Algorithms = []string{"RS256", "PS256", "ES256"}
+		}
+		if c.OIDC.Claims.Groups == "" {
+			c.OIDC.Claims.Groups = "groups"
+		}
+		if c.OIDC.Claims.Application == "" {
+			c.OIDC.Claims.Application = "azp"
+		}
 	}
 	if c.Database.SpoolDir == "" {
 		c.Database.SpoolDir = "/var/lib/tavian/spool"

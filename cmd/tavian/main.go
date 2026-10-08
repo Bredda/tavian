@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"syscall"
 	"time"
 
@@ -174,6 +175,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	metrics := server.NewMetrics()
+	var authn auth.Authenticator = auth.APIKeyAuthenticator{Snap: holder}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -210,9 +212,20 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		}()
 	}
 
+	if cfg.OIDC.Issuer != "" {
+		verifier := auth.NewJWTVerifier(cfg.OIDC, guard.HTTPClient(15*time.Second), log)
+		go verifier.Run(ctx)
+		authn = auth.Chain{
+			APIKey: authn,
+			OIDC:   auth.OIDCAuthenticator{Snap: holder, Verifier: verifier},
+		}
+		metrics.WatchOIDC(func() float64 { return verifier.KeysAge().Seconds() })
+		log.Info("OIDC enabled", "issuer", cfg.OIDC.Issuer, "audience", cfg.OIDC.Audience, "mappings", len(cfg.OIDC.Mappings))
+	}
+
 	deps := server.Deps{
 		Snap:     holder,
-		Auth:     auth.APIKeyAuthenticator{Snap: holder},
+		Auth:     authn,
 		Provider: openai.New(guard.HTTPClient(cfg.Limits.UpstreamHeaderTimeout), "tavian/"+version.String()),
 		Sink:     sink,
 		Log:      log,
@@ -321,6 +334,9 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 	if err == nil && cfg.Database != running.Database {
 		err = errors.New("database settings changed: restart required")
 	}
+	if err == nil && !sameOIDCConnection(cfg.OIDC, running.OIDC) {
+		err = errors.New("oidc settings other than mappings changed: restart required")
+	}
 	var snap *config.Snapshot
 	if err == nil {
 		snap, err = config.Compile(cfg, raw, os.Getenv)
@@ -338,6 +354,13 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 	holder.Store(snap)
 	log.Info("configuration reloaded", "revision", snap.Revision,
 		"backends", len(snap.Backends), "models", len(snap.Models))
+}
+
+// sameOIDCConnection compares everything about the OIDC setup that is fixed at
+// startup, i.e. all of it except the group mappings.
+func sameOIDCConnection(a, b config.OIDCConfig) bool {
+	a.Mappings, b.Mappings = nil, nil
+	return reflect.DeepEqual(a, b)
 }
 
 func newLogger(w io.Writer, c config.LogConfig) *slog.Logger {
