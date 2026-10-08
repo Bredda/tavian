@@ -1,6 +1,10 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -542,5 +546,123 @@ inspection:
 		if _, err := Compile(cfg, []byte(validYAML+section), env(azure)); err == nil || !strings.Contains(err.Error(), "inspection:") {
 			t.Errorf("%s: err = %v", name, err)
 		}
+	}
+}
+
+const teamPolicy = `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: research-limits }
+spec:
+  scope: { team: research }
+  models: { deny: ["*-preview"] }
+`
+
+func writeConfigWithPolicies(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "policies"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, "policies", name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "tavian.yaml")
+	if err := os.WriteFile(path, []byte(validYAML+"policy:\n  dir: policies\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestPolicyDirIsLoadedRelativeToTheConfigFile(t *testing.T) {
+	path := writeConfigWithPolicies(t, map[string]string{
+		"research.yaml": teamPolicy,
+		"README.txt":    "not a policy",
+		".hidden.yaml":  "this would not parse: [",
+		"second.yml":    strings.ReplaceAll(strings.ReplaceAll(teamPolicy, "research-limits", "other"), "team: research", "team: finance"),
+	})
+	t.Chdir(t.TempDir()) // the working directory must not matter
+	cfg, raw, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.PolicySources) != 2 {
+		t.Fatalf("sources = %d, want the two YAML files only", len(cfg.PolicySources))
+	}
+	snap, err := Compile(cfg, raw, env(map[string]string{"AZURE_KEY": "k"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(snap.Policy.Names(), ","); got != "baseline,research-limits,other" {
+		t.Errorf("policies = %s", got)
+	}
+	if len(snap.PolicySources) != 2 {
+		t.Errorf("snapshot keeps %d sources", len(snap.PolicySources))
+	}
+}
+
+func TestRevisionCoversThePolicyFiles(t *testing.T) {
+	load := func(files map[string]string) string {
+		cfg, raw, err := Load(writeConfigWithPolicies(t, files))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Compile(cfg, raw, env(map[string]string{"AZURE_KEY": "k"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Revision
+	}
+	a := load(map[string]string{"a.yaml": teamPolicy})
+	if a != load(map[string]string{"a.yaml": teamPolicy}) {
+		t.Error("the revision must be stable")
+	}
+	if a == load(map[string]string{"a.yaml": strings.ReplaceAll(teamPolicy, "-preview", "-beta")}) {
+		t.Error("changing a rule must change the revision")
+	}
+	if a == load(map[string]string{"b.yaml": teamPolicy}) {
+		t.Error("renaming a file must change the revision")
+	}
+	if a == load(nil) {
+		t.Error("removing the policies must change the revision")
+	}
+}
+
+// Without policy files the revision is what it was before they existed, so
+// that upgrading does not make every deployment look reconfigured.
+func TestRevisionWithoutPoliciesIsTheHashOfTheFile(t *testing.T) {
+	s, err := compile(t, validYAML, map[string]string{"AZURE_KEY": "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(validYAML))
+	if want := hex.EncodeToString(sum[:])[:12]; s.Revision != want {
+		t.Errorf("revision = %s, want %s", s.Revision, want)
+	}
+	if len(s.Policy.Names()) != 1 || s.Policy.Names()[0] != "baseline" {
+		t.Errorf("policies = %v, want the baseline only", s.Policy.Names())
+	}
+}
+
+func TestInvalidPoliciesRejectTheConfiguration(t *testing.T) {
+	path := writeConfigWithPolicies(t, map[string]string{
+		"bad.yaml": "apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: bad }\nspec: { scope: { organization: true }, quotas: [] }\n",
+	})
+	cfg, raw, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Compile(cfg, raw, env(map[string]string{"AZURE_KEY": "k"})); err == nil || !strings.Contains(err.Error(), "bad.yaml") || !strings.Contains(err.Error(), "quotas") {
+		t.Errorf("err = %v", err)
+	}
+	if _, _, err := Load(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {
+		t.Error("a missing configuration file must fail")
+	}
+	missing := filepath.Join(t.TempDir(), "tavian.yaml")
+	_ = os.WriteFile(missing, []byte(validYAML+"policy:\n  dir: not-there\n"), 0o600)
+	if _, _, err := Load(missing); err == nil || !strings.Contains(err.Error(), "policy.dir") {
+		t.Errorf("missing policy dir: %v", err)
 	}
 }

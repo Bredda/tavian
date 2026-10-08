@@ -73,6 +73,10 @@ type DecisionRecord struct {
 	// comes from: what the caller declared, the default, what inspection found.
 	Label        string        `json:"label,omitempty"`
 	LabelSources *LabelSources `json:"label_sources,omitempty"`
+	// Constraints are the destination classes the policy allowed for the label.
+	Constraints []string `json:"constraints,omitempty"`
+	// RulesMatched are the policy rules that fired, as "policy/rule".
+	RulesMatched []string `json:"rules_matched,omitempty"`
 
 	Outcome    string `json:"outcome"`
 	ReasonCode string `json:"reason_code"`

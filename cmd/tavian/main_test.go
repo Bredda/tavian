@@ -171,3 +171,42 @@ func TestLogKeyExpiriesNamesKeysButNotTheirSecrets(t *testing.T) {
 		t.Errorf("nothing to say, got %q", buf.String())
 	}
 }
+
+func TestValidateReportsPolicyProblemsAndWarnings(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "policies"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "tavian.yaml")
+	write := func(policy string) {
+		t.Helper()
+		_ = os.WriteFile(filepath.Join(dir, "policies", "p.yaml"), []byte(policy), 0o600)
+		_ = os.WriteFile(cfg, []byte(`
+profile: air-gapped
+policy: { dir: policies }
+backends:
+  - {id: local, type: openai, base_url: "http://127.0.0.1:8000/v1", destination_class: internal}
+models:
+  - {name: m, type: chat, route: [{backend: local}]}
+api_keys:
+  - {id: dev, hash: "sha256:`+strings.Repeat("a", 64)+`", team: t, application: a, allowed_models: ["*"]}
+`), 0o600)
+	}
+	const head = "apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: p }\nspec:\n  scope: { team: t }\n"
+
+	write(head + "  destinations: { confidential: [internal, approved-external] }\n")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"validate", "-config", cfg}, &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "policies=2") || !strings.Contains(errOut.String(), "warning: policy p: destinations.confidential lists approved-external") {
+		t.Errorf("stdout %q stderr %q", out.String(), errOut.String())
+	}
+
+	write(head + "  classification:\n    infer:\n      - { id: r, when: 'finding.subtyp == \"x\"', label: restricted }\n")
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"validate", "-config", cfg}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "p.yaml") || !strings.Contains(errOut.String(), "check the field names") {
+		t.Errorf("exit = %d, stderr %q", code, errOut.String())
+	}
+}

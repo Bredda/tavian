@@ -227,3 +227,29 @@ func TestEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestRevisionsKeepTheirPolicyFiles(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveRevision(ctx, Revision{ID: "without", Profile: "air-gapped", YAML: []byte("a: 1\n"), Version: "v"}); err != nil {
+		t.Fatal(err)
+	}
+	policies := []byte(`[{"name":"finance.yaml","yaml":"kind: Policy\n"}]`)
+	if err := s.SaveRevision(ctx, Revision{ID: "with", Profile: "air-gapped", YAML: []byte("a: 2\n"), Version: "v", Policies: policies}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	var name, body string
+	if err := s.pool.QueryRow(ctx, `SELECT jsonb_array_length(policies) FROM config_revisions WHERE revision = 'without'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("a revision without policies: %d, %v", n, err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT policies->0->>'name', policies->0->>'yaml' FROM config_revisions WHERE revision = 'with'`).Scan(&name, &body); err != nil {
+		t.Fatal(err)
+	}
+	if name != "finance.yaml" || body != "kind: Policy\n" {
+		t.Errorf("stored policy = %q %q", name, body)
+	}
+}

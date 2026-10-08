@@ -75,12 +75,40 @@ type Result struct {
 	Reason    string
 	Findings  []Finding
 	Truncated bool // more findings existed than maxFindings
-	// Kinds lists every "type.subtype" that was found, sorted, even when the
+	// Kinds summarises what was found per "type.subtype", sorted, even when the
 	// findings themselves were cut at maxFindings. Classification relies on it
 	// so that a flood of harmless findings cannot hide a sensitive one.
-	Kinds     []string
+	Kinds     []Kind
 	Detectors []DetectorInfo
 	Duration  time.Duration
+}
+
+// Kind is what was found of one type and subtype in a request: how many, and
+// the highest severity and confidence among them.
+type Kind struct {
+	Type       Type
+	Subtype    string
+	Severity   Severity
+	Confidence float64
+	Count      int
+}
+
+// Name is "type.subtype", the key used in summaries and counts.
+func (k Kind) Name() string { return string(k.Type) + "." + k.Subtype }
+
+// Rank orders severities; unknown is -1.
+func (s Severity) Rank() int {
+	switch s {
+	case SeverityLow:
+		return 0
+	case SeverityMedium:
+		return 1
+	case SeverityHigh:
+		return 2
+	case SeverityCritical:
+		return 3
+	}
+	return -1
 }
 
 // Summary is the part of a Result that goes into the usage event: counts and
@@ -238,7 +266,7 @@ func (e *Engine) Inspect(ctx context.Context, req Request) (Result, error) {
 	type outcome struct {
 		findings  []Finding
 		truncated bool
-		kinds     []string
+		kinds     []Kind
 		detector  string
 		err       error
 	}
@@ -268,7 +296,7 @@ func (e *Engine) Inspect(ctx context.Context, req Request) (Result, error) {
 	}
 }
 
-func (e *Engine) run(ctx context.Context, req Request) (out []Finding, truncated bool, kinds []string, detector string, err error) {
+func (e *Engine) run(ctx context.Context, req Request) (out []Finding, truncated bool, kinds []Kind, detector string, err error) {
 	segs := make([]Segment, len(req.Segments))
 	for i, s := range req.Segments {
 		s.Text = normalize(s.Text)
@@ -312,14 +340,26 @@ func (e *Engine) run(ctx context.Context, req Request) (out []Finding, truncated
 		}
 		return a.End < b.End
 	})
-	seen := map[string]bool{}
+	byName := map[string]*Kind{}
 	for _, f := range out {
-		if k := string(f.Type) + "." + f.Subtype; !seen[k] {
-			seen[k] = true
-			kinds = append(kinds, k)
+		k := Kind{Type: f.Type, Subtype: f.Subtype}
+		cur := byName[k.Name()]
+		if cur == nil {
+			cur = &Kind{Type: f.Type, Subtype: f.Subtype, Severity: f.Severity, Confidence: f.Confidence}
+			byName[k.Name()] = cur
+		}
+		cur.Count++
+		if f.Severity.Rank() > cur.Severity.Rank() {
+			cur.Severity = f.Severity
+		}
+		if f.Confidence > cur.Confidence {
+			cur.Confidence = f.Confidence
 		}
 	}
-	sort.Strings(kinds)
+	for _, k := range byName {
+		kinds = append(kinds, *k)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i].Name() < kinds[j].Name() })
 	if len(out) > maxFindings {
 		out, truncated = out[:maxFindings], true
 	}

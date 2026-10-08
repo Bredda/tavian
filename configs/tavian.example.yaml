@@ -72,6 +72,14 @@ log:
 #     - name: contract-ref
 #       regex: 'CTR-\d{6}'               # RE2 syntax
 
+# Policies: YAML files that take models and destinations away from teams and
+# applications, set their default label, and give labels to what you detect.
+# They can only narrow what the built-in baseline allows. One or more policies
+# per file; a relative path is relative to this file. Reloadable. Examples in
+# configs/policies/; check them with `tavian validate`. See docs/POLICY.md.
+# policy:
+#   dir: policies
+
 # API reference (Scalar) at /docs and the OpenAPI description at /openapi.yaml,
 # served on the data port without authentication. Both are embedded in the
 # binary and work offline. They describe the API only. Default: enabled.

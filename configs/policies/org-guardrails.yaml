@@ -1,0 +1,17 @@
+# Organization-wide rules. They apply to every request, on top of the built-in
+# baseline, and no policy for a team or an application can relax them.
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata:
+  name: org-guardrails
+  description: Project code names are confidential
+spec:
+  scope: { organization: true }
+  classification:
+    infer:
+      # `custom.codenames` comes from a dictionary under `inspection.dictionaries`
+      # in tavian.yaml. The built-in rules do not raise the label for custom
+      # detectors; this one does.
+      - id: codenames-are-confidential
+        when: finding.type == "custom" && finding.subtype == "codenames"
+        label: confidential

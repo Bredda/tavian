@@ -46,7 +46,7 @@ func Resolve(s *config.Snapshot, model string, c policy.Constraints) (Route, []C
 			// Compile guarantees this cannot happen; refuse rather than guess.
 			return Route{}, nil, ErrUnknownModel
 		}
-		if why := c.Excludes(b); why != "" {
+		if why := c.Excludes(b.DestinationClass, b.MaxClassification); why != "" {
 			seen = append(seen, Candidate{Backend: b.ID, Excluded: why})
 			continue
 		}
