@@ -24,7 +24,7 @@ const (
 )
 
 // Dictionary is a list of terms to look for: project code names, client names,
-// document markings such as "CONFIDENTIEL".
+// document markings such as "DIFFUSION RESTREINTE".
 type Dictionary struct {
 	// Name identifies the dictionary; it becomes the subtype of its findings.
 	Name     string   `yaml:"name"`

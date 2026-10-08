@@ -174,7 +174,8 @@ func matchNIR(t string, i int) (hit, bool) {
 
 func nirValid(c [15]byte) bool {
 	month := int(c[3]-'0')*10 + int(c[4]-'0')
-	if !(month >= 1 && month <= 12 || month == 20 || month >= 30 && month <= 42 || month >= 50) {
+	validMonth := month >= 1 && month <= 12 || month == 20 || month >= 30 && month <= 42 || month >= 50
+	if !validMonth {
 		return false
 	}
 	body := make([]byte, 0, 13)

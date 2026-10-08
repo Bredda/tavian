@@ -162,7 +162,7 @@ func TestDetectorsLeaveProseAlone(t *testing.T) {
 func TestDictionary(t *testing.T) {
 	e, err := New(Config{Dictionaries: []Dictionary{
 		{Name: "codenames", Severity: SeverityHigh, Terms: []string{"Projet Aurore", "Falcon", "Aurore"}},
-		{Name: "markings", Terms: []string{"CONFIDENTIEL", "Société Générale"}, WholeWord: ptr(true)},
+		{Name: "markings", Terms: []string{"DIFFUSION RESTREINTE", "Société Générale"}, WholeWord: ptr(true)},
 		{Name: "exact", Terms: []string{"Zeta"}, CaseSensitive: true},
 		{Name: "inside", Terms: []string{"corp"}, WholeWord: ptr(false)},
 	}, Disable: []string{"pii.ip"}}, nil)
@@ -173,7 +173,7 @@ func TestDictionary(t *testing.T) {
 		{"le projet aurore avance", []string{"codenames:projet aurore"}}, // longest, no overlap
 		{"Aurore et FALCON", []string{"codenames:Aurore", "codenames:FALCON"}},
 		{"Falconry", nil}, // whole word
-		{"document confidentiel!", []string{"markings:confidentiel"}},
+		{"document diffusion restreinte!", []string{"markings:diffusion restreinte"}},
 		{"SOCIÉTÉ GÉNÉRALE vs société générale", []string{"markings:SOCIÉTÉ GÉNÉRALE", "markings:société générale"}},
 		{"Zeta zeta", []string{"exact:Zeta"}},
 		{"megacorporation", []string{"inside:corp"}},
