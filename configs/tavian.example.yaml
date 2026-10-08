@@ -57,6 +57,8 @@ log:
 # Changing this section requires a restart.
 # database:
 #   url_env: TAVIAN_DATABASE_URL          # e.g. postgres://tavian:...@db:5432/tavian?sslmode=verify-full
+#                                         # the host must resolve to an internal address (see egress.internal_cidrs)
+#                                         # and be reached over TCP: unix sockets are refused
 #   spool_dir: /var/lib/tavian/spool      # holds events while PostgreSQL is down: use persistent storage
 #   spool_max_bytes: 67108864             # when full and PostgreSQL is still down, requests get 503
 #   emit_timeout: 2s

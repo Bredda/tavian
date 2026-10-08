@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -33,7 +35,7 @@ func testStore(t *testing.T) *Store {
 	if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
 		t.Fatal(err)
 	}
-	s, err := Open(ctx, url)
+	s, err := Open(ctx, url, (&net.Dialer{}).DialContext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,11 +152,78 @@ func TestSaveRevision(t *testing.T) {
 }
 
 func TestOpenDoesNotLeakThePassword(t *testing.T) {
-	_, err := Open(context.Background(), "postgres://user:s3cret@127.0.0.1:1/db?sslmode=bogus")
+	_, err := Open(context.Background(), "postgres://user:s3cret@127.0.0.1:1/db?sslmode=bogus", (&net.Dialer{}).DialContext)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	if strings.Contains(err.Error(), "s3cret") {
 		t.Errorf("error leaks the password: %v", err)
+	}
+}
+
+func TestOpenConnectsOnlyThroughTheGivenDialer(t *testing.T) {
+	url := os.Getenv("TAVIAN_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TAVIAN_TEST_DATABASE_URL not set")
+	}
+	var dialed []string
+	real := &net.Dialer{}
+	s, err := Open(context.Background(), url, func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return real.DialContext(ctx, network, addr)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if len(dialed) == 0 {
+		t.Error("the connection did not go through the dial function")
+	}
+	want, err := Endpoints(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, addr := range dialed {
+		// pgx must hand the guard the configured name, not an IP it resolved itself.
+		if addr != want[0] && !strings.EqualFold(addr, want[0]) {
+			t.Errorf("dialed %q, want the configured endpoint %q", addr, want[0])
+		}
+	}
+}
+
+func TestOpenRefusedByTheDialerFails(t *testing.T) {
+	refuse := func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("egress: refused") }
+	_, err := Open(context.Background(), "postgres://u:p@db.example:5432/x", refuse)
+	if err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := Open(context.Background(), "postgres://u:p@db.example/x", nil); err == nil {
+		t.Error("a nil dial function must be refused")
+	}
+}
+
+func TestEndpoints(t *testing.T) {
+	for url, want := range map[string]string{
+		"postgres://u:p@DB.Example:6543/x":                 "db.example:6543",
+		"postgres://u:p@db.internal/x":                     "db.internal:5432",
+		"postgres://u:p@a.internal:5432,b.internal:5433/x": "a.internal:5432,b.internal:5433",
+		"host=db.internal port=5434 user=u dbname=x":       "db.internal:5434",
+		"postgres://u:p@[2001:db8::1]:5432/x":              "[2001:db8::1]:5432",
+	} {
+		got, err := Endpoints(url)
+		if err != nil || strings.Join(got, ",") != want {
+			t.Errorf("Endpoints(%q) = %v, %v; want %s", url, got, err, want)
+		}
+	}
+	for _, url := range []string{
+		"postgres:///x?host=/var/run/postgresql",
+		"host=/var/run/postgresql dbname=x",
+		"not a url at all %%",
+	} {
+		if got, err := Endpoints(url); err == nil {
+			t.Errorf("Endpoints(%q) = %v, want an error", url, got)
+		} else if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("error leaks the URL: %v", err)
+		}
 	}
 }

@@ -8,22 +8,63 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Store wraps a connection pool.
 type Store struct{ pool *pgxpool.Pool }
 
-// Open connects to PostgreSQL and verifies the connection.
-func Open(ctx context.Context, url string) (*Store, error) {
+// DialFunc opens a network connection. Tavian passes the egress guard's.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// Endpoints lists the "host:port" pairs a connection URL can connect to,
+// read the way pgx reads it, so that they can be declared to the egress guard.
+// Unix sockets are refused: the guard only covers TCP.
+func Endpoints(url string) ([]string, error) {
+	cfg, err := pgconn.ParseConfig(url)
+	if err != nil {
+		return nil, errInvalidURL
+	}
+	var out []string
+	seen := map[string]bool{}
+	// Fallbacks repeat the primary host (once per TLS variant): list each endpoint once.
+	for _, c := range append([]*pgconn.FallbackConfig{{Host: cfg.Host, Port: cfg.Port}}, cfg.Fallbacks...) {
+		if strings.HasPrefix(c.Host, "/") || strings.HasPrefix(c.Host, "@") {
+			return nil, errors.New("database: unix sockets are not supported, use a TCP host")
+		}
+		ep := net.JoinHostPort(strings.ToLower(c.Host), strconv.Itoa(int(c.Port)))
+		if !seen[ep] {
+			seen[ep] = true
+			out = append(out, ep)
+		}
+	}
+	return out, nil
+}
+
+// pgx errors can echo the connection string; never wrap them whole.
+var errInvalidURL = errors.New("database: invalid connection URL")
+
+// Open connects to PostgreSQL and verifies the connection. Every connection
+// is made through dial (the egress guard), and name resolution is left to it
+// too: pgx would otherwise resolve host names itself and hand dial bare IPs,
+// which the guard could not match against its allow-list.
+func Open(ctx context.Context, url string, dial DialFunc) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
-		// pgx errors can echo the connection string; never wrap them whole.
-		return nil, errors.New("database: invalid connection URL")
+		return nil, errInvalidURL
 	}
+	if dial == nil {
+		return nil, errors.New("database: a dial function is required")
+	}
+	cfg.ConnConfig.DialFunc = pgconn.DialFunc(dial)
+	cfg.ConnConfig.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
 	cfg.MaxConns = 8
 	cfg.MaxConnLifetime = time.Hour
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

@@ -97,7 +97,7 @@ Backends declare `destination_class` and `max_classification`. A request may onl
 
 ## Egress control
 
-- The gateway is the only component with outbound access, via a single egress guard.
+- The gateway is the only component with outbound access, via a single egress guard. That covers model backends, the identity provider and PostgreSQL: the database connection is made with the guard's dialer and, whatever the profile, may only reach an internal address (unix sockets are refused). A lint rule (`forbidigo`) fails the build if any other package dials, resolves names or uses a ready-made HTTP client.
 - Outbound destinations are derived only from validated Backend configuration; the active deployment profile gates which destination classes may exist.
 - In `air-gapped`, configuration containing a non-internal Backend is rejected at load, and the dialer refuses non-internal addresses even if one slipped through.
 - Optional outbound proxy and custom CA bundle for corporate networks.
@@ -161,7 +161,7 @@ Status as of v0.1.0. Items are meant to become tests.
 - [ ] TLS everywhere; mTLS to PostgreSQL and internal backends where possible. *Database TLS works through the URL; native listener TLS and backend mTLS: M3*
 - [ ] Request size, header, and concurrency limits. *Size and header limits done; an in-flight cap is next*
 - [ ] CI check that no code path logs request/response bodies. *Planned with content inspection (M2): a canary test across success, error and stream paths, plus lint*
-- [ ] CI check that outbound connections only originate from the egress guard. *Planned: the PostgreSQL connection is to go through the guard too, then a lint rule enforces it*
+- [x] CI check that outbound connections only originate from the egress guard (`forbidigo` rule; PostgreSQL goes through the guard too)
 - [ ] Fuzzing for the request parser and detectors. *Detectors with content inspection (M2); parsers right after*
 - [x] Dependency updates (Dependabot for Go modules, Actions, Docker, and the conformance suite's SDK pins)
 - [ ] SBOM, signed releases. *Release archives carry checksums today; signing and SBOM are v1.0 (see [OPEN_QUESTIONS](OPEN_QUESTIONS.md) 21)*

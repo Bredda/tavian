@@ -11,7 +11,7 @@ Each ADR captures one significant decision: context, decision, consequences. Sta
 | [0005](0005-fail-closed.md) | Security decisions fail closed | Proposed |
 | [0006](0006-policy-yaml-with-cel.md) | Policy as declarative YAML with CEL conditions | Proposed |
 | [0007](0007-quota-reserve-settle.md) | Quotas use reserve/settle accounting | Proposed |
-| [0008](0008-single-egress-point-and-deployment-profiles.md) | Gateway is the single egress point; deployment profiles | Proposed |
+| [0008](0008-single-egress-point-and-deployment-profiles.md) | Gateway is the single egress point; deployment profiles | Accepted |
 | [0009](0009-multidimensional-metering.md) | Multi-dimensional metering including energy and carbon | Proposed |
 | [0010](0010-transactional-outbox-no-broker.md) | Transactional outbox instead of a message broker | Accepted |
 | [0011](0011-apache-2-licence.md) | Apache-2.0 licence | Accepted |

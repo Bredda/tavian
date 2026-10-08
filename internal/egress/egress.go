@@ -1,7 +1,9 @@
 // Package egress is the only place in Tavian that opens outbound connections
-// (ADR-0008). Destinations are limited to the endpoints of configured
-// backends; backends that must stay internal (and every backend under the
-// air-gapped profile) may only resolve to internal addresses.
+// (ADR-0008): to model backends, to the identity provider and to PostgreSQL.
+// Destinations are limited to the configured endpoints; those that must stay
+// internal (every one under the air-gapped profile, and the database always)
+// may only resolve to internal addresses. A lint rule keeps other packages from
+// dialing on their own.
 package egress
 
 import (
@@ -24,6 +26,7 @@ type Guard struct {
 	profile  config.Profile
 	snap     *config.Holder
 	internal []*net.IPNet
+	pinned   map[string]struct{} // infrastructure endpoints, always internal
 	dialer   net.Dialer
 	lookup   func(ctx context.Context, host string) ([]net.IP, error)
 }
@@ -56,6 +59,19 @@ func New(profile config.Profile, snap *config.Holder, internalCIDRs []string) (*
 	return g, nil
 }
 
+// Pin declares infrastructure endpoints ("host:port") that are always allowed
+// and always required to resolve to internal addresses, whatever the profile:
+// the database is operator-chosen infrastructure, not part of the
+// configuration snapshot. Call it before the guard is used.
+func (g *Guard) Pin(endpoints ...string) {
+	if g.pinned == nil {
+		g.pinned = map[string]struct{}{}
+	}
+	for _, e := range endpoints {
+		g.pinned[strings.ToLower(e)] = struct{}{}
+	}
+}
+
 func (g *Guard) isInternal(ip net.IP) bool {
 	for _, n := range g.internal {
 		if n.Contains(ip) {
@@ -73,13 +89,18 @@ func (g *Guard) DialContext(ctx context.Context, network, addr string) (net.Conn
 	}
 	key := net.JoinHostPort(strings.ToLower(host), port)
 
-	s := g.snap.Load()
-	if s == nil {
-		return nil, fmt.Errorf("%w: no configuration loaded", ErrDestinationNotAllowed)
-	}
-	class, ok := s.Endpoints[key]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s is not a configured endpoint (backend or identity provider)", ErrDestinationNotAllowed, key)
+	var class config.DestinationClass
+	if _, ok := g.pinned[key]; ok {
+		class = config.ClassInternal
+	} else {
+		s := g.snap.Load()
+		if s == nil {
+			return nil, fmt.Errorf("%w: no configuration loaded", ErrDestinationNotAllowed)
+		}
+		var ok bool
+		if class, ok = s.Endpoints[key]; !ok {
+			return nil, fmt.Errorf("%w: %s is not a configured endpoint (backend, identity provider or database)", ErrDestinationNotAllowed, key)
+		}
 	}
 
 	var ips []net.IP
