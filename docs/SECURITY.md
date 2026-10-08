@@ -113,6 +113,16 @@ Backends declare `destination_class` and `max_classification`. A request may onl
 
 Always, for every request (including refused ones): the `DecisionRecord` — identity, config revision, requested/served model and backend, label, finding summaries (no values), rules matched, outcome, reason codes, usage and cost.
 
+*In main after v0.1.0:* a decision record is written for every **authenticated** chat request, refused ones included, in the PostgreSQL outbox (kind `decision`, with the same disk spool and fail-closed behaviour as usage events). It holds identity, config revision, requested model, chosen backend, outcome, a stable reason code, and the inspection summary and findings (positions and keyed fingerprints, never values). The label, rules matched and constraints are added by the policy engine, usage and cost stay in the usage event, which carries the `decision_id`. A refusal is recorded **before** the answer is sent, so the `decision_id` a caller receives (`X-Tavian-Decision-Id` header, `error.decision_id`) always exists; if the record cannot be stored the request fails with `audit_unavailable`. Requests refused before the caller is known (bad credentials, overload) are only counted and logged: recording them would let anyone fill the audit trail.
+
+| Outcome | Reason codes |
+|---|---|
+| `served` | `SERVED` |
+| `refused` | `INVALID_REQUEST`, `REQUEST_TOO_LARGE`, `MODEL_NOT_ALLOWED`, `MODEL_NOT_FOUND`, `MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`, `UPSTREAM_UNAVAILABLE` |
+| `failed` | `UPSTREAM_ERROR` (the backend answered with an error status), `STREAM_INTERRUPTED`, `CLIENT_DISCONNECTED` |
+
+Reason codes are stable; the OpenAI-compatible error `code` that SDKs see (`model_not_allowed`, …) is unchanged. Spooled records that cannot be read back are set aside in `events.rejected` and counted (`tavian_spool_rejected_records_total`), never dropped. The hash chain over these records is the next step ([roadmap](ROADMAP.md)).
+
 Optionally, per policy, the **content** at one of four levels:
 
 | Level | Stored |

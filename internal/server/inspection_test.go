@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bredda/tavian/internal/audit"
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/inspect"
 )
@@ -87,14 +88,17 @@ func TestMultimodalRequestsAreRefusedAndRecorded(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest || errorCode(t, resp) != inspect.GapMultimodal {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	evs := f.sink.Events()
-	if len(evs) != 1 {
-		t.Fatalf("events = %d, want one recording the refusal", len(evs))
+	if n := len(f.sink.Events()); n != 0 {
+		t.Errorf("usage events = %d: nothing was used", n)
 	}
-	e := evs[0]
-	if e.Outcome != "inspection_blocked" || e.Status != 400 || e.Backend != "" || e.Inspection == nil ||
-		e.Inspection.Status != inspect.StatusFailed || e.Inspection.Reason != inspect.GapMultimodal {
-		t.Errorf("event = %+v inspection = %+v", e, e.Inspection)
+	recs := decisions(f)
+	if len(recs) != 1 {
+		t.Fatalf("decision records = %d, want one recording the refusal", len(recs))
+	}
+	d := recs[0]
+	if d.Outcome != audit.OutcomeRefused || d.ReasonCode != audit.MultimodalNotInspected.Code || d.Status != 400 || d.Backend != "" ||
+		d.Inspection == nil || d.Inspection.Status != inspect.StatusFailed || d.Inspection.Reason != inspect.GapMultimodal {
+		t.Errorf("record = %+v inspection = %+v", d, d.Inspection)
 	}
 	if !strings.Contains(metricsText(t, f), `tavian_requests_total{outcome="inspection_blocked",route="chat_completions"} 1`) {
 		t.Error("blocked outcome not counted")
@@ -131,8 +135,8 @@ func TestDetectorFailureBlocksTheRequest(t *testing.T) {
 	if backendCalls != 0 {
 		t.Errorf("the backend was called %d times for a request that could not be inspected", backendCalls)
 	}
-	if evs := f.sink.Events(); len(evs) != 1 || evs[0].Outcome != "inspection_blocked" || evs[0].Inspection.Status != inspect.StatusFailed {
-		t.Errorf("events = %+v", evs)
+	if recs := decisions(f); len(recs) != 1 || recs[0].ReasonCode != audit.InspectionFailed.Code || recs[0].Inspection.Status != inspect.StatusFailed {
+		t.Errorf("records = %+v", recs)
 	}
 	if !strings.Contains(metricsText(t, f), `tavian_inspections_total{status="failed"} 1`) {
 		t.Error("failure not counted")
@@ -222,7 +226,7 @@ func TestNoContentLeaksThroughObservability(t *testing.T) {
 	b, _ := io.ReadAll(resp.Body)
 	errorBodies = append(errorBodies, "inspection failure: "+string(b))
 
-	events, _ := json.Marshal(append(f.sink.Events(), g.sink.Events()...))
+	events, _ := json.Marshal(append(f.sink.Records(), g.sink.Records()...))
 	surfaces := map[string]string{
 		"logs":    logs.String(),
 		"metrics": metricsText(t, f) + metricsText(t, g),

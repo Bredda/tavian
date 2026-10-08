@@ -21,9 +21,14 @@ import (
 // ErrFull is returned by Append when the record does not fit.
 var ErrFull = errors.New("spool full")
 
+// ErrTooLarge is returned by Append for a record Drain could not read back:
+// accepting it would block the replay of everything behind it.
+var ErrTooLarge = errors.New("spool: record too large")
+
 const (
 	activeName   = "events.spool"
 	drainingName = "events.draining"
+	rejectedName = "events.rejected"
 	// maxRecord bounds a single line when replaying.
 	maxRecord = 1 << 20
 )
@@ -88,6 +93,9 @@ func (s *Spool) Append(rec []byte) error {
 	if bytes.IndexByte(rec, '\n') >= 0 {
 		return errors.New("spool: record contains a newline")
 	}
+	if len(rec) >= maxRecord {
+		return ErrTooLarge
+	}
 	n := int64(len(rec)) + 1
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -103,6 +111,21 @@ func (s *Spool) Append(rec []byte) error {
 	}
 	s.size += n
 	return nil
+}
+
+// Reject sets a record aside in events.rejected, outside the size accounting,
+// for an operator to inspect. Nothing reads that file back.
+func (s *Spool) Reject(rec []byte) error {
+	f, err := os.OpenFile(filepath.Join(s.dir, rejectedName), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // operator-chosen directory
+	if err != nil {
+		return fmt.Errorf("spool: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	line := append(append(make([]byte, 0, len(rec)+1), rec...), '\n')
+	if _, err := f.Write(line); err != nil {
+		return fmt.Errorf("spool: %w", err)
+	}
+	return f.Sync()
 }
 
 // Drain replays every record through fn, in batches of at most batchSize. A

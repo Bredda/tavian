@@ -67,7 +67,7 @@ Organization (one per deployment, for now)
 
 | Entity | Description |
 |---|---|
-| **DecisionRecord** | For every request, including refused ones: identity, requested model, label, findings summary, rules matched, constraints, chosen backend, outcome, reason codes. |
+| **DecisionRecord** | For every authenticated chat request, including refused ones: identity, requested model, findings (positions and fingerprints, never values), chosen backend, outcome, stable reason code; label, rules matched and constraints are added by the policy engine. Its `decision_id` is returned to the caller and referenced by the usage event. |
 | **UsageEvent** | Tokens (in/out/cached/reasoning), cost €, energy Wh, carbon gCO₂e, latency, status. Basis of quotas reports and chargeback. |
 | **AuditRecord** | Tamper-evident envelope: decision + (optional, encrypted) content + hash-chain link. See [SECURITY.md](SECURITY.md#audit). |
 | **ConfigRevision** | Immutable, numbered snapshot of the whole configuration. Every DecisionRecord references the revision it was evaluated under. |
