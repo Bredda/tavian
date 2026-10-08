@@ -18,3 +18,9 @@ coverage.*
 .vscode/
 .DS_Store
 .claude/settings.local.json
+
+# Conformance suite dependencies
+/conformance/python/.venv/
+/conformance/python/.pytest_cache/
+/conformance/python/__pycache__/
+/conformance/node/node_modules/

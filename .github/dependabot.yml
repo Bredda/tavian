@@ -20,6 +20,20 @@ updates:
       actions:
         patterns: ["*"]
 
+  - package-ecosystem: pip
+    directory: /conformance/python
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: npm
+    directory: /conformance/node
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+
   - package-ecosystem: docker
     directory: /
     schedule:
