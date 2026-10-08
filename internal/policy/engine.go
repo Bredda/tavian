@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -56,6 +57,15 @@ type policy struct {
 	destinations map[taxonomy.Label]map[taxonomy.Class]bool
 	defaultLabel taxonomy.Label
 	infer        []inferRule
+	actions      []actionRule
+}
+
+type actionRule struct {
+	id      string // policy/rule
+	cond    *condition
+	action  string
+	reason  string
+	classes map[taxonomy.Class]bool // for restrict_destinations
 }
 
 type inferRule struct {
@@ -76,7 +86,11 @@ func Compile(sources []Source) (*Engine, error) {
 	if len(sources) > maxSources {
 		return nil, fmt.Errorf("policies: at most %d files", maxSources)
 	}
-	env, err := newEnv()
+	inferEnv, err := newEnv(false)
+	if err != nil {
+		return nil, fmt.Errorf("policies: %w", err)
+	}
+	actionEnv, err := newEnv(true)
 	if err != nil {
 		return nil, fmt.Errorf("policies: %w", err)
 	}
@@ -120,7 +134,7 @@ func Compile(sources []Source) (*Engine, error) {
 			continue
 		}
 		seen[l.doc.Metadata.Name] = l.where
-		p, cerrs := compilePolicy(env, l.doc, l.where, l.src)
+		p, cerrs := compilePolicy(inferEnv, actionEnv, l.doc, l.where, l.src)
 		if len(cerrs) > 0 {
 			errs = append(errs, cerrs...)
 			continue
@@ -134,7 +148,7 @@ func Compile(sources []Source) (*Engine, error) {
 	return e, nil
 }
 
-func compilePolicy(env *cel.Env, d Document, where, source string) (*policy, []error) {
+func compilePolicy(inferEnv, actionEnv *cel.Env, d Document, where, source string) (*policy, []error) {
 	var errs []error
 	p := &policy{
 		name: d.Metadata.Name, source: source, scope: d.Spec.Scope,
@@ -162,12 +176,39 @@ func compilePolicy(env *cel.Env, d Document, where, source string) (*policy, []e
 			continue
 		}
 		ids[id] = true
-		cond, err := compileCondition(env, r.When)
+		cond, err := compileCondition(inferEnv, r.When)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: spec.classification.infer[%d] (%s): when: %w", where, i, id, err))
 			continue
 		}
 		p.infer = append(p.infer, inferRule{id: p.name + "/" + id, cond: cond, label: r.Label})
+	}
+	for i, r := range d.Spec.Inspection.Request.OnFinding {
+		id := r.ID
+		if id == "" {
+			id = fmt.Sprintf("action-%d", i)
+		}
+		if ids[id] {
+			errs = append(errs, fmt.Errorf("%s: spec.inspection.request.on_finding[%d]: duplicate id %q", where, i, id))
+			continue
+		}
+		ids[id] = true
+		cond, err := compileCondition(actionEnv, r.When)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: spec.inspection.request.on_finding[%d] (%s): when: %w", where, i, id, err))
+			continue
+		}
+		rule := actionRule{id: p.name + "/" + id, cond: cond, action: r.Action, reason: r.Reason}
+		if rule.action == ActionRestrict {
+			rule.classes = map[taxonomy.Class]bool{taxonomy.ClassInternal: true}
+			if len(r.Classes) > 0 {
+				rule.classes = map[taxonomy.Class]bool{}
+				for _, c := range r.Classes {
+					rule.classes[c] = true
+				}
+			}
+		}
+		p.actions = append(p.actions, rule)
 	}
 	return p, errs
 }
@@ -262,6 +303,21 @@ type Input struct {
 	Kinds []inspect.Kind
 }
 
+// Block says that a rule refuses the request.
+type Block struct {
+	Rule   string // policy/rule
+	Reason string // the rule's reason code, or POLICY_BLOCKED
+}
+
+// DefaultBlockReason is the code of a block rule that names none.
+const DefaultBlockReason = "POLICY_BLOCKED"
+
+// RedactKind is a kind of finding that must be replaced in the request.
+type RedactKind struct {
+	Type    inspect.Type
+	Subtype string
+}
+
 // Decision is the outcome of phase A.
 type Decision struct {
 	Label       taxonomy.Label
@@ -269,6 +325,17 @@ type Decision struct {
 	Constraints Constraints
 	// Matched lists the rules that fired, as "policy/rule".
 	Matched []string
+
+	// Block is set when a rule refuses the request; nothing else matters then.
+	Block *Block
+	// Redact lists the kinds of finding to replace by placeholders.
+	Redact []RedactKind
+	// Flagged lists the flag rules that fired: recorded, nothing more.
+	Flagged []string
+	// Restricted is what restrict_destinations rules left of the destination
+	// classes: nil if no such rule applied, and an empty non-nil slice if they
+	// left none. Constraints already reflect it.
+	Restricted []taxonomy.Class
 }
 
 // Decide computes the label of a request and the constraints that follow from
@@ -288,10 +355,7 @@ func (e *Engine) Decide(in Input) (Decision, error) {
 	for _, p := range ps {
 		for _, r := range p.infer {
 			for _, k := range in.Kinds {
-				ok, err := r.cond.eval(activation(in.Identity, in.Request, Kindish{
-					Type: string(k.Type), Subtype: k.Subtype, Severity: string(k.Severity),
-					Confidence: k.Confidence, Count: int64(k.Count),
-				}))
+				ok, err := r.cond.eval(activation(in.Identity, in.Request, kindish(k), ""))
 				if err != nil {
 					return Decision{}, fmt.Errorf("rule %s: %w", r.id, err)
 				}
@@ -304,12 +368,88 @@ func (e *Engine) Decide(in Input) (Decision, error) {
 	}
 
 	label := taxonomy.Max(taxonomy.Max(def, in.Declared), inferred)
-	return Decision{
+	d := Decision{
 		Label:       label,
 		Sources:     LabelSources{Declared: in.Declared, Default: def, Inferred: inferred},
 		Constraints: Constraints{Label: label, Classes: classesFor(ps, label)},
 		Matched:     matched,
-	}, nil
+	}
+	if err := e.act(ps, in, &d); err != nil {
+		return Decision{}, err
+	}
+	return d, nil
+}
+
+func kindish(k inspect.Kind) Kindish {
+	return Kindish{Type: string(k.Type), Subtype: k.Subtype, Severity: string(k.Severity), Confidence: k.Confidence, Count: int64(k.Count)}
+}
+
+// act applies the on_finding rules to d. When several apply the most
+// restrictive wins: block, then restrict_destinations, redact, flag, allow. A
+// block stops everything else, so it is the only thing left in the decision.
+func (e *Engine) act(ps []*policy, in Input, d *Decision) error {
+	var restricted map[taxonomy.Class]bool
+	for _, p := range ps {
+		for _, r := range p.actions {
+			for _, k := range in.Kinds {
+				ok, err := r.cond.eval(activation(in.Identity, in.Request, kindish(k), string(d.Label)))
+				if err != nil {
+					return fmt.Errorf("rule %s: %w", r.id, err)
+				}
+				if !ok {
+					continue
+				}
+				d.Matched = appendOnce(d.Matched, r.id)
+				switch r.action {
+				case ActionBlock:
+					if d.Block == nil {
+						reason := r.reason
+						if reason == "" {
+							reason = DefaultBlockReason
+						}
+						d.Block = &Block{Rule: r.id, Reason: reason}
+					}
+				case ActionRestrict:
+					if restricted == nil {
+						restricted = map[taxonomy.Class]bool{}
+						for c := range r.classes {
+							restricted[c] = true
+						}
+					} else {
+						for c := range restricted {
+							if !r.classes[c] {
+								delete(restricted, c)
+							}
+						}
+					}
+				case ActionRedact:
+					rk := RedactKind{Type: k.Type, Subtype: k.Subtype}
+					if !slices.Contains(d.Redact, rk) {
+						d.Redact = append(d.Redact, rk)
+					}
+				case ActionFlag:
+					d.Flagged = appendOnce(d.Flagged, r.id)
+				}
+			}
+		}
+	}
+	if restricted != nil {
+		// non-nil even when empty: "no class is allowed" is a restriction, and
+		// phase B must not mistake it for "no restriction"
+		d.Restricted = append([]taxonomy.Class{}, sortedClasses(restricted)...)
+		d.Constraints.Classes = intersectClasses(d.Constraints.Classes, restricted)
+	}
+	return nil
+}
+
+func intersectClasses(classes []taxonomy.Class, with map[taxonomy.Class]bool) []taxonomy.Class {
+	var out []taxonomy.Class
+	for _, c := range classes {
+		if with[c] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func appendOnce(s []string, v string) []string {
@@ -399,11 +539,26 @@ func (c Constraints) Excludes(class taxonomy.Class, max taxonomy.Label) string {
 // of trusting what routing was given, so a bug in routing, or in the way
 // constraints are passed to it, cannot send data where it must not go. A
 // non-nil error means exactly such a bug.
-func (e *Engine) Assert(id Identity, label taxonomy.Label, backend string, class taxonomy.Class, max taxonomy.Label) error {
-	c := Constraints{Label: label, Classes: classesFor(e.applicable(id), label)}
-	if why := c.Excludes(class, max); why != "" {
+func (e *Engine) Assert(id Identity, d Decision, b Backend) error {
+	classes := classesFor(e.applicable(id), d.Label)
+	if d.Restricted != nil {
+		restricted := map[taxonomy.Class]bool{}
+		for _, c := range d.Restricted {
+			restricted[c] = true
+		}
+		classes = intersectClasses(classes, restricted)
+	}
+	c := Constraints{Label: d.Label, Classes: classes}
+	if why := c.Excludes(b.Class, b.Max); why != "" {
 		return fmt.Errorf("routing chose backend %q (class %s, max %s) for a %s request: %s",
-			backend, class, max, label, strings.ToLower(why))
+			b.ID, b.Class, b.Max, d.Label, strings.ToLower(why))
 	}
 	return nil
+}
+
+// Backend is a backend as the assertion sees it.
+type Backend struct {
+	ID    string
+	Class taxonomy.Class
+	Max   taxonomy.Label
 }

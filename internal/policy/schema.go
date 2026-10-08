@@ -70,11 +70,56 @@ type Spec struct {
 	Destinations   map[taxonomy.Label][]taxonomy.Class `yaml:"destinations"`
 	Classification ClassificationSpec                  `yaml:"classification"`
 
+	Inspection InspectionSpec `yaml:"inspection"`
+
 	// Not implemented yet: refused with a message naming where they arrive.
-	Inspection yaml.Node `yaml:"inspection"`
-	Quotas     yaml.Node `yaml:"quotas"`
-	Audit      yaml.Node `yaml:"audit"`
+	Quotas yaml.Node `yaml:"quotas"`
+	Audit  yaml.Node `yaml:"audit"`
 }
+
+// InspectionSpec says what to do with what inspection finds.
+type InspectionSpec struct {
+	Request RequestInspection `yaml:"request"`
+	// OnError is "block", the only behaviour: a request that cannot be
+	// inspected is not served.
+	OnError string `yaml:"on_error"`
+
+	// Not implemented yet.
+	Response yaml.Node `yaml:"response"`
+}
+
+// RequestInspection holds the actions taken on the findings of a request.
+type RequestInspection struct {
+	OnFinding []ActionRule `yaml:"on_finding"`
+
+	// Detectors are configured under `inspection:` in tavian.yaml.
+	Rulesets yaml.Node `yaml:"rulesets"`
+}
+
+// Actions on findings, from the most restrictive to the least: when several
+// apply, the first of these wins.
+const (
+	ActionBlock    = "block"
+	ActionRestrict = "restrict_destinations"
+	ActionRedact   = "redact"
+	ActionFlag     = "flag"
+	ActionAllow    = "allow"
+)
+
+// ActionRule takes an action when its condition holds for a kind of finding.
+type ActionRule struct {
+	ID   string `yaml:"id"`
+	When string `yaml:"when"`
+	// Action is one of the Action* constants.
+	Action string `yaml:"action"`
+	// Reason is the code a block is recorded under (default POLICY_BLOCKED).
+	Reason string `yaml:"reason"`
+	// Classes are the destination classes left to a request by
+	// restrict_destinations (default: internal only).
+	Classes []taxonomy.Class `yaml:"classes"`
+}
+
+var reasonRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]{2,63}$`)
 
 // ModelsSpec restricts which models may be used under a policy.
 type ModelsSpec struct {
@@ -208,12 +253,53 @@ func (d *Document) validate(where string, baseline bool) []error {
 		}
 	}
 
+	insp := d.Spec.Inspection
+	switch insp.OnError {
+	case "", "block":
+	case "allow":
+		addf("spec.inspection.on_error: allow is not supported; a request that cannot be inspected is always refused")
+	default:
+		addf("spec.inspection.on_error must be block (got %q)", insp.OnError)
+	}
+	if len(insp.Request.OnFinding) > maxRules {
+		addf("spec.inspection.request.on_finding: at most %d rules", maxRules)
+	}
+	for i, r := range insp.Request.OnFinding {
+		at := fmt.Sprintf("spec.inspection.request.on_finding[%d]", i)
+		if r.ID != "" && !nameRe.MatchString(r.ID) {
+			addf("%s: id %q must match %s", at, r.ID, nameRe)
+		}
+		if strings.TrimSpace(r.When) == "" {
+			addf("%s: when is required", at)
+		}
+		if len(r.When) > maxExprBytes {
+			addf("%s: when is longer than %d bytes", at, maxExprBytes)
+		}
+		switch r.Action {
+		case ActionBlock, ActionRestrict, ActionRedact, ActionFlag, ActionAllow:
+		default:
+			addf("%s: action must be one of block, restrict_destinations, redact, flag, allow (got %q)", at, r.Action)
+		}
+		if r.Reason != "" && (r.Action != ActionBlock || !reasonRe.MatchString(r.Reason)) {
+			addf("%s: reason is for block rules and must match %s (got %q)", at, reasonRe, r.Reason)
+		}
+		if len(r.Classes) > 0 && r.Action != ActionRestrict {
+			addf("%s: classes is only for restrict_destinations", at)
+		}
+		for _, c := range r.Classes {
+			if !c.Valid() {
+				addf("%s: unknown destination class %q", at, c)
+			}
+		}
+	}
+
 	for _, ns := range []struct {
 		field string
 		node  yaml.Node
 		when  string
 	}{
-		{"spec.inspection", d.Spec.Inspection, "a later change"},
+		{"spec.inspection.response", insp.Response, "response inspection (M4)"},
+		{"spec.inspection.request.rulesets", insp.Request.Rulesets, "nothing: detectors are configured under `inspection:` in tavian.yaml"},
 		{"spec.quotas", d.Spec.Quotas, "quotas (M2 step 2.5)"},
 		{"spec.audit", d.Spec.Audit, "the audit trail work (M2 step 2.6 and M4)"},
 	} {

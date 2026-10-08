@@ -182,14 +182,23 @@ spec:
 
 // Phase B evaluates the policies again, so a router that ignores the
 // constraints is caught by a team policy as well as by the baseline.
-func TestPhaseBHonoursTeamPolicies(t *testing.T) {
-	faulty := func(d *Deps) {
+// faultyRouter ignores the constraints and takes the first target of the model.
+func faultyRouter() []func(*Deps) {
+	return []func(*Deps){func(d *Deps) {
 		d.Route = func(s *config.Snapshot, model string, _ policy.Constraints) (router.Route, []router.Candidate, error) {
 			m := s.Models[model]
+			if m == nil || len(m.Route) == 0 {
+				return router.Route{}, nil, router.ErrUnknownModel
+			}
 			return router.Route{Backend: s.Backends[m.Route[0].Backend], UpstreamModel: m.Route[0].UpstreamModel}, nil, nil
 		}
-	}
-	f := buildFixture(t, fixtureSpec{maxBody: 1 << 20, external: true, deps: []func(*Deps){faulty}, policies: []policy.Source{policyFile("closed.yaml", `
+	}}
+}
+
+// Phase B evaluates the policies again, so a router that ignores the
+// constraints is caught by a team policy as well as by the baseline.
+func TestPhaseBHonoursTeamPolicies(t *testing.T) {
+	f := buildFixture(t, fixtureSpec{maxBody: 1 << 20, external: true, deps: faultyRouter(), policies: []policy.Source{policyFile("closed.yaml", `
 metadata: { name: research-stays-home }
 spec:
   scope: { team: research }

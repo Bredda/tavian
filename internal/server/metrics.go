@@ -10,6 +10,7 @@ import (
 
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/inspect"
+	"github.com/bredda/tavian/internal/policy"
 )
 
 // Metrics holds the Prometheus instruments. Label values are drawn from small
@@ -22,6 +23,7 @@ type Metrics struct {
 	tokens   *prometheus.CounterVec
 
 	labels      *prometheus.CounterVec
+	actions     *prometheus.CounterVec
 	inspections *prometheus.CounterVec
 	findings    *prometheus.CounterVec
 	inspectTime prometheus.Histogram
@@ -51,6 +53,10 @@ func NewMetrics() *Metrics {
 			Name: "tavian_requests_by_label_total",
 			Help: "Chat requests by classification label (public|internal|confidential|restricted), refused ones included.",
 		}, []string{"label"}),
+		actions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_policy_actions_total",
+			Help: "Requests on which a policy action applied, by action (block|restrict_destinations|redact|flag).",
+		}, []string{"action"}),
 		inspections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "tavian_inspections_total",
 			Help: "Request inspections, by status (ok|skipped|failed).",
@@ -73,7 +79,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
-		m.inspections, m.findings, m.inspectTime, m.labels,
+		m.inspections, m.findings, m.inspectTime, m.labels, m.actions,
 	)
 	return m
 }
@@ -176,4 +182,21 @@ func (m *Metrics) observeInspection(r inspect.Result) {
 // observeLabel counts a classified request.
 func (m *Metrics) observeLabel(l config.Classification) {
 	m.labels.WithLabelValues(string(l)).Inc()
+}
+
+// observeActions counts the policy actions that applied to a request.
+func (m *Metrics) observeActions(d policy.Decision) {
+	if d.Block != nil {
+		m.actions.WithLabelValues(policy.ActionBlock).Inc()
+		return
+	}
+	if d.Restricted != nil {
+		m.actions.WithLabelValues(policy.ActionRestrict).Inc()
+	}
+	if len(d.Redact) > 0 {
+		m.actions.WithLabelValues(policy.ActionRedact).Inc()
+	}
+	if len(d.Flagged) > 0 {
+		m.actions.WithLabelValues(policy.ActionFlag).Inc()
+	}
 }

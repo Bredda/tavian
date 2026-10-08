@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/bredda/tavian/internal/inspect"
@@ -50,9 +51,21 @@ type frame struct {
 // The body is walked token by token, so duplicate keys are all seen, whichever
 // one a backend would keep.
 func ExtractChat(raw []byte) (inspect.Request, error) {
+	req, _, err := scanChat(raw)
+	return req, err
+}
+
+// span is where the literal of one string value sits in the request body.
+type span struct{ start, end int }
+
+// scanChat is ExtractChat that also returns, for each segment, where its string
+// literal is in raw, so that RedactChat can replace exactly those bytes.
+func scanChat(raw []byte) (inspect.Request, []span, error) {
 	var req inspect.Request
+	var spans []span
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	var st []frame
+	prev := 0 // offset after the previous token
 
 	gap := func(kind string, msg, part int) {
 		for _, g := range req.Gaps {
@@ -77,19 +90,21 @@ func ExtractChat(raw []byte) (inspect.Request, error) {
 		tok, err := dec.Token()
 		if err == io.EOF {
 			if len(st) != 0 {
-				return inspect.Request{}, fmt.Errorf("%w: unexpected end of JSON input", ErrInvalidRequest)
+				return inspect.Request{}, nil, fmt.Errorf("%w: unexpected end of JSON input", ErrInvalidRequest)
 			}
-			return req, nil
+			return req, spans, nil
 		}
 		if err != nil {
-			return inspect.Request{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+			return inspect.Request{}, nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 		}
+		tokStart, tokEnd := prev, int(dec.InputOffset())
+		prev = tokEnd
 		switch t := tok.(type) {
 		case json.Delim:
 			if t == '{' || t == '[' {
 				if len(st) >= maxDepth {
 					gap(inspect.GapTooComplex, -1, -1)
-					return req, nil
+					return req, spans, nil
 				}
 				if t == '{' && isContentValue(st) {
 					msg, part := position(st)
@@ -120,12 +135,16 @@ func ExtractChat(raw []byte) (inspect.Request, error) {
 			if t != "" {
 				if len(req.Segments) >= maxSegments {
 					gap(inspect.GapTooComplex, -1, -1)
-					return req, nil
+					return req, spans, nil
 				}
 				msg, part := position(st)
 				req.Segments = append(req.Segments, inspect.Segment{
 					MessageIndex: msg, Field: field(st), Part: part, Text: t,
 				})
+				// Between tokens there is only whitespace, ',' and ':', so the
+				// literal starts at the first quote after the previous token.
+				open := bytes.IndexByte(raw[tokStart:tokEnd], '"')
+				spans = append(spans, span{start: tokStart + open, end: tokEnd})
 			}
 			done()
 		default: // number, boolean, null
@@ -187,4 +206,41 @@ func field(st []frame) string {
 		return name
 	}
 	return inspect.FieldOther
+}
+
+// RedactChat returns raw with the string values at the given segment indexes
+// (as numbered by ExtractChat) replaced by the given texts. Everything else,
+// key order, numbers, whitespace, is kept byte for byte.
+func RedactChat(raw []byte, replacements map[int]string) ([]byte, error) {
+	req, spans, err := scanChat(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Gaps) > 0 {
+		return nil, fmt.Errorf("%w: the request has parts that cannot be rewritten", ErrInvalidRequest)
+	}
+	idx := make([]int, 0, len(replacements))
+	for i := range replacements {
+		if i < 0 || i >= len(spans) {
+			return nil, fmt.Errorf("redaction targets segment %d of %d", i, len(spans))
+		}
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+	var out bytes.Buffer
+	out.Grow(len(raw))
+	at := 0
+	for _, i := range idx {
+		out.Write(raw[at:spans[i].start])
+		var lit bytes.Buffer
+		enc := json.NewEncoder(&lit)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(replacements[i]); err != nil {
+			return nil, err
+		}
+		out.Write(bytes.TrimRight(lit.Bytes(), "\n"))
+		at = spans[i].end
+	}
+	out.Write(raw[at:])
+	return out.Bytes(), nil
 }
