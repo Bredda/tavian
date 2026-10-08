@@ -446,3 +446,26 @@ func TestParseDeclared(t *testing.T) {
 		}
 	}
 }
+
+// The default label is the most sensitive among the policies that apply,
+// whatever their order: a narrower scope cannot lower it.
+func TestDefaultLabelIsTheHighestNotTheLast(t *testing.T) {
+	e := compile(t, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: strict }
+spec:
+  scope: { organization: true }
+  classification: { default: restricted }
+`, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: relaxed }
+spec:
+  scope: { team: finance }
+  classification: { default: public }
+`)
+	if got := decide(t, e, Identity{Team: "finance"}, "").Label; got != taxonomy.Restricted {
+		t.Errorf("default label = %s: a team policy lowered the organization's default", got)
+	}
+}
