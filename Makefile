@@ -1,0 +1,60 @@
+.DEFAULT_GOAL := help
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo)
+LDFLAGS := -s -w \
+	-X github.com/bredda/tavian/internal/version.Version=$(VERSION) \
+	-X github.com/bredda/tavian/internal/version.Commit=$(COMMIT)
+
+COMPOSE := docker compose -f deploy/compose/docker-compose.yml
+
+.PHONY: help
+help: ## Show this help
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+.PHONY: build
+build: ## Build the binaries into ./bin
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/tavian ./cmd/tavian
+	CGO_ENABLED=0 go build -trimpath -o bin/mockllm ./cmd/mockllm
+
+.PHONY: test
+test: ## Run tests with the race detector
+	go test -race -count=1 ./...
+
+.PHONY: cover
+cover: ## Run tests and print total coverage
+	go test -race -count=1 -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out | tail -n 1
+
+.PHONY: lint
+lint: ## Run golangci-lint (must be installed)
+	golangci-lint run ./...
+
+.PHONY: fmt
+fmt: ## Format the code
+	gofmt -w .
+
+.PHONY: tidy
+tidy: ## Tidy go.mod / go.sum
+	go mod tidy
+
+.PHONY: run
+run: ## Run the gateway with ./tavian.yaml (copy configs/tavian.example.yaml first)
+	go run ./cmd/tavian serve -config tavian.yaml
+
+.PHONY: keygen
+keygen: ## Generate an API key and its config hash
+	go run ./cmd/tavian keygen
+
+.PHONY: demo
+demo: ## Start the demo stack (gateway + mock backend) on localhost:8080
+	$(COMPOSE) up --build -d
+	@echo "Try: curl -s localhost:8080/v1/models -H 'Authorization: Bearer tav_VavQsTNlrxWVesBv7GinuMLhYBbmhns_YNloIcWS3UI'"
+
+.PHONY: demo-down
+demo-down: ## Stop the demo stack
+	$(COMPOSE) down
+
+.PHONY: clean
+clean: ## Remove build output
+	rm -rf bin dist coverage.out

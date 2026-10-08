@@ -1,0 +1,59 @@
+# Annotated example configuration. Unknown keys are rejected on purpose.
+# Validate with:  tavian validate -config tavian.yaml
+# Reload with:    kill -HUP <pid>   (invalid configs are rejected, the current one stays active)
+
+# Required. Which kinds of backend may exist, and therefore whether the gateway
+# may open any outbound connection beyond your own network:
+#   air-gapped         only `internal` backends
+#   controlled-egress  `internal` + `approved-external`
+#   open-egress        any
+# Changing the profile requires a restart.
+profile: air-gapped
+
+listen:
+  data: ":8080"                # OpenAI-compatible API
+  admin: "127.0.0.1:9090"      # /healthz /readyz /metrics: keep it private
+
+limits:
+  max_request_bytes: 4194304   # 4 MiB
+  upstream_header_timeout: 120s
+  shutdown_grace: 30s
+
+log:
+  level: info                  # debug | info | warn | error
+  format: json                 # json | text
+
+# What counts as "internal" for the egress guard. Defaults: loopback, RFC 1918,
+# link-local, IPv6 ULA. Internal backends (and all backends when air-gapped)
+# must resolve inside these ranges.
+# egress:
+#   internal_cidrs: ["10.0.0.0/8"]
+
+backends:
+  - id: vllm-a
+    type: openai                          # OpenAI-compatible: vLLM, llama.cpp, ...
+    base_url: http://vllm-a.internal:8000/v1
+    destination_class: internal           # internal | approved-external | public-external
+    max_classification: restricted        # most sensitive label it may receive (default depends on class)
+    # api_key_env: VLLM_A_API_KEY         # credential read from this environment variable
+
+  # Only valid with profile controlled-egress or open-egress:
+  # - id: azure-eu
+  #   type: openai
+  #   base_url: https://my-resource.openai.azure.com/openai/v1
+  #   destination_class: approved-external
+  #   api_key_env: AZURE_OPENAI_API_KEY
+
+models:
+  - name: llama-70b                       # the name clients request
+    type: chat
+    route:
+      - backend: vllm-a
+        upstream_model: meta-llama/Llama-3.3-70B-Instruct   # defaults to the model name
+
+api_keys:
+  - id: research-app
+    hash: sha256:REPLACE_WITH_OUTPUT_OF_tavian_keygen
+    team: research
+    application: notebook
+    allowed_models: ["llama-*"]           # '*' wildcard; an empty list is invalid

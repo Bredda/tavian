@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - sloglint
+  settings:
+    errcheck:
+      # Writing to an io.Writer we do not own (stdout/stderr, an HTTP response)
+      # has no useful recovery path.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    sloglint:
+      no-mixed-args: false
+      kv-only: false
+      attr-only: false
+  exclusions:
+    rules:
+      # Tests may ignore errors on throwaway helpers and use plain http.Get.
+      - path: _test\.go
+        linters: [errcheck, gosec, noctx, bodyclose]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/bredda/tavian

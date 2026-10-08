@@ -1,0 +1,45 @@
+# Tavian demo stack: the gateway in front of a mock OpenAI-compatible backend.
+#
+#   docker compose -f deploy/compose/docker-compose.yml up --build
+#
+# The backend lives on an `internal` network: it has no route to the Internet,
+# which is the property Tavian is built around. The gateway also joins a normal
+# network only so that Docker can publish its port to the host; it still
+# refuses every connection that is not a configured backend (egress guard).
+# In production, enforce this with network policies / firewall rules too.
+name: tavian-demo
+
+services:
+  tavian:
+    build:
+      context: ../..
+      args: { CMD: tavian }
+    image: tavian:dev
+    command: ["serve"]
+    volumes:
+      - ./tavian.yaml:/etc/tavian/tavian.yaml:ro
+    ports:
+      - "127.0.0.1:8080:8080" # data plane (OpenAI-compatible API)
+      - "127.0.0.1:9090:9090" # admin: /healthz /readyz /metrics
+    networks: [backplane, publish]
+    depends_on: [mockllm]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  mockllm:
+    build:
+      context: ../..
+      args: { CMD: mockllm }
+    image: tavian-mockllm:dev
+    command: ["-addr", ":8000"]
+    networks: [backplane]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  backplane:
+    internal: true # no Internet access
+  publish: {}

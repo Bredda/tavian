@@ -1,0 +1,20 @@
+# Build output
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Local configuration and secrets (the demo config under deploy/ is tracked)
+/tavian.yaml
+/tavian.local.yaml
+.env
+.env.*
+*.pem
+*.key
+
+# Editors / OS / tooling
+.idea/
+.vscode/
+.DS_Store
+.claude/settings.local.json

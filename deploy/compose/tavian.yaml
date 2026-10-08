@@ -1,0 +1,32 @@
+# Demo configuration. The API key below is PUBLIC and for this demo only:
+#   tav_VavQsTNlrxWVesBv7GinuMLhYBbmhns_YNloIcWS3UI
+# Generate your own with `tavian keygen`.
+profile: air-gapped
+
+listen:
+  data: ":8080"
+  admin: "0.0.0.0:9090" # published on host loopback only, see docker-compose.yml
+
+log:
+  level: info
+  format: json
+
+backends:
+  - id: mockllm
+    type: openai
+    base_url: http://mockllm:8000/v1
+    destination_class: internal
+
+models:
+  - name: demo-chat
+    type: chat
+    route:
+      - backend: mockllm
+        upstream_model: mock
+
+api_keys:
+  - id: demo
+    hash: sha256:a8757de9b3eccb5407d01b327be3b9d58d5eb89c32e35945ab5a01e43c774b22
+    team: demo-team
+    application: curl
+    allowed_models: ["demo-*"]
