@@ -47,6 +47,12 @@ type Config struct {
 	// to fingerprint values (at least 16 bytes). Without it a random key is
 	// generated per process: fingerprints then only correlate within one run.
 	FingerprintKeyEnv string `yaml:"fingerprint_key_env"`
+	// Disable lists built-in detectors to turn off (see Builtins), for example
+	// when a detector is too noisy for the data a deployment handles.
+	Disable []string `yaml:"disable"`
+	// Dictionaries and Patterns are the deployment's own detectors (L1).
+	Dictionaries []Dictionary `yaml:"dictionaries"`
+	Patterns     []Pattern    `yaml:"patterns"`
 }
 
 // ApplyDefaults fills in unset values.
