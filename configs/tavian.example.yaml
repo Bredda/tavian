@@ -76,7 +76,9 @@ log:
 # applications, set their default label, and give labels to what you detect.
 # They can only narrow what the built-in baseline allows. One or more policies
 # per file; a relative path is relative to this file. Reloadable. Examples in
-# configs/policies/; check them with `tavian validate`. See docs/POLICY.md.
+# configs/policies/; check them with `tavian validate` and test them with
+# `tavian policy test`. A policy with `metadata.mode: shadow` enforces nothing and
+# records what it would have done. See docs/POLICY.md.
 # policy:
 #   dir: policies
 

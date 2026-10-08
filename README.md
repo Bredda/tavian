@@ -38,6 +38,19 @@ ask $FIN demo-partner "Vire 100 EUR vers FR14 2004 1010 0505 0001 3M02 606"  # n
 make demo-down
 ```
 
+The demo also loads policies from `deploy/compose/policies/`: e-mail addresses are replaced by placeholders before they reach a model, secrets are refused, and a third policy runs in *shadow mode* (it enforces nothing, it records what it would have done):
+
+```bash
+say() { curl -s localhost:8080/v1/chat/completions -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"$3\"}]}" | grep -o '"content":"[^"]*"\|"message":"[^"]*"'; }
+DEMO=tav_VavQsTNlrxWVesBv7GinuMLhYBbmhns_YNloIcWS3UI
+say $DEMO demo-chat "Write to alice@corp.example"      # the model only sees [EMAIL_1]
+say $DEMO demo-chat "The key is AKIAIOSFODNN7EXAMPLE"  # blocked by policy (SECRET_IN_PROMPT)
+say $DEMO demo-chat "Server 10.12.13.14 is down"       # answered; the shadow policy would have blocked it
+docker compose -f deploy/compose/docker-compose.yml exec postgres psql -U tavian -d tavian -c \
+  "select payload->>'reason_code' as reason, payload->>'label' as label, payload->'redactions' as redactions, payload->'shadow'->>'would_refuse' as shadow_would_refuse from outbox where kind='decision' order by seq"
+```
+
 Every answer carries an `X-Tavian-Decision-Id` header, and the decision record in PostgreSQL (`outbox`, kind `decision`) says why. The keys above are public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
 
 ### Sign in with OIDC

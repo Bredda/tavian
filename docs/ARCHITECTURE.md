@@ -162,7 +162,7 @@ PostgreSQL is the source of truth for configuration, usage aggregates and audit.
 Package layout (✓ = present in the M1 skeleton, the rest are placeholders with a `doc.go` or planned):
 
 ```
-cmd/tavian/                ✓ entrypoint: serve, validate, migrate, keygen, version (later: verify-audit, policy test)
+cmd/tavian/                ✓ entrypoint: serve, validate, migrate, policy test, keygen, version (later: verify-audit)
 cmd/mockllm/               ✓ fake OpenAI-compatible backend for demos and tests
 internal/config/           ✓ strict YAML → validated, immutable Snapshot; profile rules; Holder
 internal/auth/             ✓ API keys and OIDC access tokens (JWKS cache) → Identity
@@ -175,7 +175,8 @@ internal/docs/             ✓ embedded OpenAPI description + Scalar viewer serv
 internal/mockllm/          ✓ mock backend implementation
 internal/glob, ids, version  ✓ small utilities
 internal/inspect/          ✓ detectors, findings, fail-closed engine (classification: M2)
-internal/policy/           ✓ YAML + CEL evaluation, baseline policy, scopes (actions, shadow and `policy test`: M2)
+internal/policy/           ✓ YAML + CEL evaluation, baseline policy, scopes, actions on findings, shadow mode
+internal/pipeline/         ✓ the decision steps (model authorization, policy, clearance, routing, phase B) shared by the gateway and `policy test`
 internal/quota/            · admission, reserve/settle, counters (M2)
 internal/audit/            ✓ decision records and reason codes (hash chain: M2; encryption: M4)
 internal/admin/            · control-plane API (M3)

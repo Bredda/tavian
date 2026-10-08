@@ -74,6 +74,7 @@ services:
     environment: *database-url
     volumes:
       - ./tavian.yaml:/etc/tavian/tavian.yaml:ro
+      - ./policies:/etc/tavian/policies:ro
     networks: [backplane]
     depends_on:
       postgres: { condition: service_healthy }
@@ -91,6 +92,7 @@ services:
     environment: *database-url
     volumes:
       - ./tavian.yaml:/etc/tavian/tavian.yaml:ro
+      - ./policies:/etc/tavian/policies:ro
       - spool:/var/lib/tavian/spool
     ports:
       - "127.0.0.1:8080:8080" # data plane (OpenAI-compatible API)

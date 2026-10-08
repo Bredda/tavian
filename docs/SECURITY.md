@@ -136,7 +136,7 @@ Always, for every request (including refused ones): the `DecisionRecord` — ide
 
 | Outcome | Reason codes |
 |---|---|
-| `served` | `SERVED` |
+| `served` | `SERVED` (a `shadow` section may say what policies in shadow mode would have changed) |
 | `refused` | `INVALID_REQUEST`, `REQUEST_TOO_LARGE`, `MODEL_NOT_ALLOWED`, `CLEARANCE_EXCEEDED`, `MODEL_NOT_FOUND`, `NO_ELIGIBLE_BACKEND`, `ROUTING_ASSERTION_FAILED`, `POLICY_ERROR`, `POLICY_BLOCKED` (or the `reason` of the block rule), `REDACTION_INCOMPLETE`, `REDACTION_FAILED`, `MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`, `UPSTREAM_UNAVAILABLE` |
 | `failed` | `UPSTREAM_ERROR` (the backend answered with an error status), `STREAM_INTERRUPTED`, `CLIENT_DISCONNECTED` |
 

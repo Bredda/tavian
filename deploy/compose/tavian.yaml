@@ -14,6 +14,10 @@ log:
 database:
   url_env: TAVIAN_DATABASE_URL
 
+# Policies: see policies/demo.yaml (mounted next to this file by the compose file).
+policy:
+  dir: policies
+
 # Sign in with the Keycloak of the demo stack (see README). `issuer` is the
 # name the tokens carry; the signing keys are fetched from inside the network.
 oidc:
