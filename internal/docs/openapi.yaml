@@ -30,6 +30,12 @@ info:
     - **Unknown request fields are passed through** to the backend untouched.
     - Every response carries an `X-Request-Id` header. Send your own
       `X-Request-Id` to correlate; it is kept if it is a plain identifier.
+    - **Classification.** Tavian classifies every request (`public` <
+      `internal` < `confidential` < `restricted`) from what it contains and
+      what you declare. Send `X-Tavian-Classification` to raise the label of
+      a request; it can never lower what Tavian finds. A request classified
+      above your credentials' clearance is refused with 403
+      `classification_exceeds_clearance`.
     - Every chat request from an authenticated caller leaves a **decision
       record** in the audit trail, refused requests included. Its identifier is
       in the `X-Tavian-Decision-Id` header, and in `error.decision_id` when the
@@ -108,6 +114,12 @@ paths:
 
         Errors raised by the model backend itself (for example a 400 for an
         unsupported parameter) are relayed with the backend's status and body.
+      parameters:
+        - name: X-Tavian-Classification
+          in: header
+          required: false
+          description: Raises the classification label of this request. It never lowers what Tavian finds in the content.
+          schema: { type: string, enum: [public, internal, confidential, restricted] }
       requestBody:
         required: true
         content:
@@ -342,7 +354,7 @@ components:
     InvalidRequest:
       description: |
         Malformed request: invalid JSON, a missing `model`, or a field of the
-        wrong type (code `invalid_request`). Also refused with 400: content the
+        wrong type, or an invalid `X-Tavian-Classification` header (code `invalid_request`). Also refused with 400: content the
         gateway cannot inspect, namely images, audio, files or other non-text
         content parts (`multimodal_not_inspectable`) and requests with too many
         strings or too deep nesting (`request_too_complex`).
@@ -362,7 +374,11 @@ components:
           example:
             error: { message: missing or invalid credentials (API key or access token), type: invalid_request_error, code: invalid_api_key, param: null }
     ModelNotAllowed:
-      description: The caller may not use this model. Code `model_not_allowed`.
+      description: |
+        The caller may not use this model (code `model_not_allowed`), or the
+        request is classified above what their credentials are cleared to send
+        (code `classification_exceeds_clearance`; the message names the label,
+        never the content).
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

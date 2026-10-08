@@ -73,7 +73,8 @@ Progress:
 - [x] L0 detectors (e-mail, IBAN, payment card, NIR, phone, IPv4, token-shaped secrets, credential assignments) and L1 custom dictionaries and patterns
 - [x] Canary test that no content reaches logs, metrics, events or error bodies; fuzz targets for the extractor and detectors; latency benchmark
 - [x] Decision records for every authenticated request (refusals included), `decision_id` in the error body and `X-Tavian-Decision-Id`, stable reason codes, kind-aware outbox and spool ([SECURITY.md](SECURITY.md#audit))
-- [ ] Classification, backend `max_classification`, routing by constraints, second "external" mock backend
+- [x] Classification: label from declared header, default and inferred findings, enforced against the caller's clearance, recorded in decision records, usage events and a metric
+- [ ] Backend `max_classification`, routing by constraints, phase B assertion, second "external" mock backend
 - [ ] Policy engine (YAML + CEL), `tavian policy test`, shadow mode
 - [ ] Quotas (reserve/settle, in memory)
 - [ ] Outbox worker framework (consumer cursors, runner), hash chain over decision records, `tavian verify-audit`
