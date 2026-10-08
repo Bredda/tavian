@@ -247,27 +247,39 @@ func TestCustomConfigValidation(t *testing.T) {
 	}
 }
 
-// A hostile prompt must not make inspection explode: pathological inputs for
-// each scanner stay within the default budget.
-func TestPathologicalInputsStayFast(t *testing.T) {
-	e := NewWith(5*time.Second, testKey, builtinSet()...)
-	inputs := map[string]string{
-		"digits":         strings.Repeat("1 ", 100000),
-		"zeros":          strings.Repeat("0", 200000),
-		"phone-like":     strings.Repeat("+1 ", 70000),
-		"ats":            strings.Repeat("a@", 100000),
-		"letters+digits": strings.Repeat("AB12 ", 40000),
-		"equals":         strings.Repeat("password=", 30000),
-		"prefixes":       strings.Repeat("ghp_AKIAeyJ-----BEGIN ", 10000),
-		"dots":           strings.Repeat("1.2.3.4.", 50000),
+// A hostile prompt must not make inspection explode: for inputs built to
+// trigger every scanner over and over, quadrupling the input must cost about
+// four times as much (linear), not sixteen (quadratic). Comparing two sizes
+// instead of timing against a fixed limit keeps the test meaningful under the
+// race detector and coverage instrumentation, which slow these loops a lot.
+func TestPathologicalInputsScaleLinearly(t *testing.T) {
+	e := NewWith(10*time.Minute, testKey, builtinSet()...)
+	units := map[string]string{
+		"digits":         "1 ",
+		"zeros":          "0",
+		"phone-like":     "+1 ",
+		"ats":            "a@",
+		"letters+digits": "AB12 ",
+		"equals":         "password=",
+		"prefixes":       "ghp_AKIAeyJ-----BEGIN ",
+		"dots":           "1.2.3.4.",
 	}
-	for name, in := range inputs {
-		start := time.Now()
-		if _, err := e.Inspect(context.Background(), text(in)); err != nil {
-			t.Errorf("%s: %v", name, err)
+	best := func(in string) time.Duration {
+		fastest := time.Duration(1<<63 - 1)
+		for range 2 {
+			start := time.Now()
+			if _, err := e.Inspect(context.Background(), text(in)); err != nil {
+				t.Fatalf("%v", err)
+			}
+			fastest = min(fastest, time.Since(start))
 		}
-		if d := time.Since(start); d > 2*time.Second {
-			t.Errorf("%s: took %v for %d bytes", name, d, len(in))
+		return fastest
+	}
+	const small = 4000
+	for name, unit := range units {
+		short, long := best(strings.Repeat(unit, small)), best(strings.Repeat(unit, 4*small))
+		if long > 10*max(short, 2*time.Millisecond) {
+			t.Errorf("%s: %d units took %v, %d units took %v: not linear", name, small, short, 4*small, long)
 		}
 	}
 }
