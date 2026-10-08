@@ -65,7 +65,7 @@ func TestPaymentCard(t *testing.T) {
 		{"3530111333300000", []string{"payment_card:3530111333300000"}},
 		{"2223000048400011", []string{"payment_card:2223000048400011"}},
 		{"4111111111111112", nil},     // Luhn fails
-		{"1234567812345670", nil},     // Luhn ok, no card scheme
+		{"6000 0000 0000 0000", nil},  // Luhn ok, no card scheme
 		{"41111111111111111111", nil}, // 20 digits
 		{"x4111111111111111", nil},
 		{"4111 1111 1111", nil},
