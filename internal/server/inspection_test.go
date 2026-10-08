@@ -21,7 +21,14 @@ import (
 const (
 	canaryEmail = "canary.person@canary-corp.example"
 	canaryText  = "CANARY-PROMPT-TEXT-7731"
+	canaryIBAN  = "FR14 2004 1010 0505 0001 3M02 606"
+	canaryCard  = "4111 1111 1111 1111"
+	canarySec   = "AKIAIOSFODNN7EXAMPLE"
+	canaryTerm  = "Projet Zorglub"
 )
+
+// canaryContent is a prompt holding one value of every kind of detector.
+const canaryContent = canaryText + " " + canaryEmail + " " + canaryIBAN + " " + canaryCard + " " + canarySec + " " + canaryTerm
 
 func metricsText(t *testing.T, f *fixture) string {
 	t.Helper()
@@ -177,10 +184,17 @@ func TestNoContentLeaksThroughObservability(t *testing.T) {
 	debugLog := func(d *Deps) {
 		d.Log = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
-	f := buildFixture(t, fixtureSpec{maxBody: 1 << 20, deps: []func(*Deps){debugLog}})
+	withDictionary := func(s *config.Snapshot) {
+		e, err := inspect.New(inspect.Config{Dictionaries: []inspect.Dictionary{{Name: "codenames", Terms: []string{canaryTerm}}}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Inspector = e
+	}
+	f := buildFixture(t, fixtureSpec{maxBody: 1 << 20, deps: []func(*Deps){debugLog}, snap: withDictionary})
 
 	prompt := func(model, extra string) string {
-		return `{"model":"` + model + `",` + extra + `"messages":[{"role":"user","content":"` + canaryText + ` ` + canaryEmail + `"}]}`
+		return `{"model":"` + model + `",` + extra + `"messages":[{"role":"user","content":"` + canaryContent + `"}]}`
 	}
 	bodies := map[string]string{
 		"answered":           prompt("llama-70b", ""),
@@ -188,8 +202,8 @@ func TestNoContentLeaksThroughObservability(t *testing.T) {
 		"backend error":      prompt("broken", ""),
 		"unknown model":      prompt("nope", ""),
 		"denied model":       prompt("other-1", ""),
-		"multimodal refusal": `{"model":"llama-70b","messages":[{"role":"user","content":[{"type":"text","text":"` + canaryText + canaryEmail + `"},{"type":"image_url"}]}]}`,
-		"malformed":          `{"model":"llama-70b","messages":[{"content":"` + canaryText + canaryEmail,
+		"multimodal refusal": `{"model":"llama-70b","messages":[{"role":"user","content":[{"type":"text","text":"` + canaryContent + `"},{"type":"image_url"}]}]}`,
+		"malformed":          `{"model":"llama-70b","messages":[{"content":"` + canaryContent,
 	}
 	var errorBodies []string
 	for name, body := range bodies {
@@ -219,14 +233,19 @@ func TestNoContentLeaksThroughObservability(t *testing.T) {
 		if text == "" {
 			t.Errorf("%s: nothing captured, the test would pass for nothing", name)
 		}
-		for _, canary := range []string{canaryText, canaryEmail, "canary-corp", "canary.person"} {
+		for _, canary := range []string{
+			canaryText, canaryEmail, "canary-corp", "canary.person",
+			canaryIBAN, "FR1420041010050500013M02606", "2004 1010", canaryCard, "4111111111111111", canarySec, "Zorglub",
+		} {
 			if strings.Contains(text, canary) {
 				t.Errorf("%s leak %q:\n%.600s", name, canary, text)
 			}
 		}
 	}
 	// The detection really happened on the paths that were inspected.
-	if !strings.Contains(string(events), `"pii.email"`) {
-		t.Error("no event carries an email finding: the canary was not even detected")
+	for _, kind := range []string{`"pii.email"`, `"pii.iban"`, `"pii.payment_card"`, `"secret.aws_access_key"`, `"custom.codenames"`} {
+		if !strings.Contains(string(events), kind) {
+			t.Errorf("no event counts %s: the canary was not even detected", kind)
+		}
 	}
 }
