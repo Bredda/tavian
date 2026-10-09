@@ -43,6 +43,7 @@ type Metrics struct {
 	pruneErrors     prometheus.Counter
 
 	eventsLost prometheus.Counter
+	admin      *prometheus.CounterVec
 }
 
 // NewMetrics creates a private registry (no global state) with the Go and
@@ -121,6 +122,10 @@ func NewMetrics() *Metrics {
 			Name: "tavian_outbox_prune_errors_total",
 			Help: "Failed retention passes. A steady increase means the outbox is growing.",
 		}),
+		admin: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_admin_requests_total",
+			Help: "Administration API calls, by action and outcome (applied, rejected, unauthenticated, audit_unavailable, failed).",
+		}, []string{"action", "outcome"}),
 		eventsLost: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "tavian_usage_events_lost_total",
 			Help: "Usage events that could be neither stored nor spooled. Any increase is an audit gap.",
@@ -129,10 +134,15 @@ func NewMetrics() *Metrics {
 	m.reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		m.requests, m.duration, m.tokens, m.eventsLost,
+		m.requests, m.duration, m.tokens, m.eventsLost, m.admin,
 		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate, m.consumerEvents, m.consumerErrors, m.consumerPending, m.cost, m.pruned, m.pruneErrors,
 	)
 	return m
+}
+
+// ObserveAdmin counts one call of the administration API.
+func (m *Metrics) ObserveAdmin(action, outcome string) {
+	m.admin.WithLabelValues(action, outcome).Inc()
 }
 
 // Handler serves the metrics in Prometheus text format.

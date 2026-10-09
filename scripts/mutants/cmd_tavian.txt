@@ -1,0 +1,8 @@
+# Mutants for the reloader of cmd/tavian, see scripts/mutate.sh.
+# file	old	new
+cmd/tavian/main.go	if record != nil {	if false {
+cmd/tavian/main.go	Code: "restart_required", Message: err.Error(), Status: http.StatusConflict	Code: "restart_required", Message: err.Error()
+cmd/tavian/main.go	Actor: "sighup", Action: admin.ActionReload,	Actor: "sighup", Action: "x",
+cmd/tavian/main.go	record(snap.Revision, map[string]any{"previous": previous, "unchanged": previous == snap.Revision})	record(previous, map[string]any{"previous": previous, "unchanged": previous == snap.Revision})
+cmd/tavian/main.go	previous := r.holder.Load().Revision	previous := ""
+cmd/tavian/main.go	case cfg.Database != running.Database:	case false:

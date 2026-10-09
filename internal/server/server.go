@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bredda/tavian/internal/admin"
 	"github.com/bredda/tavian/internal/audit"
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
@@ -86,11 +87,13 @@ func NewDataHandler(d Deps) http.Handler {
 	return s.requestID(s.recoverer(s.accessLog(mux)))
 }
 
-// NewAdminHandler returns the health, readiness and metrics endpoints.
+// NewAdminHandler returns the health, readiness and metrics endpoints and,
+// when adm is not nil, the administration API with its reference (it answers
+// 404 until an admin token is configured).
 //
 // audit may be nil. When set, readiness also requires that the audit trail can
 // still record events: a gateway that must refuse requests is not ready.
-func NewAdminHandler(snap *config.Holder, m *Metrics, audit meter.Admitter) http.Handler {
+func NewAdminHandler(snap *config.Holder, m *Metrics, audit meter.Admitter, adm *admin.Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok\n")
@@ -109,6 +112,15 @@ func NewAdminHandler(snap *config.Holder, m *Metrics, audit meter.Admitter) http
 		_, _ = io.WriteString(w, "ready\n")
 	})
 	mux.Handle("GET /metrics", m.Handler())
+	if adm != nil {
+		d := *adm
+		d.Snap = snap
+		if d.Observe == nil {
+			d.Observe = m.ObserveAdmin
+		}
+		admin.Register(mux, d)
+		docs.RegisterAdmin(mux, version.String(), func() bool { return admin.Enabled(snap) })
+	}
 	return mux
 }
 

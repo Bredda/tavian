@@ -2,7 +2,7 @@
 
 _Status: built (M2 steps 2.6 and 2.6b)._
 
-Every authenticated chat request leaves a **decision record** ([SECURITY.md](SECURITY.md#audit)). This page is about making those records *tamper-evident*: showing, later, that none was changed, removed or slipped in. It is written for whoever runs the gateway and for the auditor who checks it.
+Every authenticated chat request leaves a **decision record** ([SECURITY.md](SECURITY.md#audit)), and every change made through the administration API or by `SIGHUP` leaves an **admin change record** ([ADMIN_API.md](ADMIN_API.md)); both go in the chain. This page is about making those records *tamper-evident*: showing, later, that none was changed, removed or slipped in. It is written for whoever runs the gateway and for the auditor who checks it.
 
 ## What it guarantees, and what it does not
 
@@ -20,8 +20,8 @@ It does not prove that the gateway recorded what really happened (a compromised 
 
 ## How it works
 
-1. The gateway writes each decision record to the outbox table.
-2. A background consumer (the *sealer*) reads new decision records in transaction order and appends them to `audit_chain`. Each entry holds `content_hash` (SHA-256 of a canonical form of the record: keys sorted, no insignificant whitespace), `prev_hash` and `entry_hash`, which commits to the position, the previous entry, the event id, the time and the content hash. The first entry links to a fixed genesis hash.
+1. The gateway writes each decision record to the outbox table; the administration API writes each change record there too (kind `admin_change`), in the same transaction as its `admin_changes` row and before the change takes effect.
+2. A background consumer (the *sealer*) reads new decision and admin change records in transaction order and appends them to `audit_chain`. Each entry holds `content_hash` (SHA-256 of a canonical form of the record: keys sorted, no insignificant whitespace), `prev_hash` and `entry_hash`, which commits to the position, the previous entry, the event id, the time and the content hash. The first entry links to a fixed genesis hash.
 3. When a signing key is configured, the sealer writes a **seal** every `audit.seal_every_events` entries (default 1000) or when the oldest unsealed entry is `audit.seal_every` old (default 5 minutes): "entries *a* to *b* end with this hash", signed with Ed25519. Seals are numbered without gaps.
 4. `tavian verify-audit` recomputes everything from what is in the database.
 
@@ -63,7 +63,7 @@ It only reads, so a read-only database role is enough. It checks that
 
 `-from-seal N` starts after a signed seal instead of the first entry, for long chains. Records that the chain still covers but the outbox no longer holds are a problem unless `-allow-pruned` is given and a signed seal covers them *and* the retention log accounts for them (see below).
 
-The report also says how many entries come after the last seal (not covered by a signature yet) and how many records are waiting to be chained (normal for a few seconds). Only decision records are chained; usage events are accounting.
+The report also says how many entries come after the last seal (not covered by a signature yet) and how many records are waiting to be chained (normal for a few seconds). Decision and admin change records are chained; usage events are accounting. Retention never removes admin change records.
 
 ## Retention
 

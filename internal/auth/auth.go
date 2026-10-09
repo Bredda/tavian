@@ -47,6 +47,33 @@ func bearer(r *http.Request) (string, bool) {
 	return token, true
 }
 
+// Admin is the authenticated principal of the administration API: the token's
+// id, which names the author of every change it makes.
+type Admin struct{ TokenID string }
+
+// AdminAuthenticator validates `Authorization: Bearer <token>` against the
+// administration tokens of the current config snapshot. Data-plane API keys
+// and OIDC tokens are not accepted, and administration tokens are not
+// accepted by the data plane (they are not in its key table).
+type AdminAuthenticator struct{ Snap *config.Holder }
+
+// Authenticate returns the administrator behind r, or an ErrUnauthenticated.
+func (a AdminAuthenticator) Authenticate(r *http.Request) (*Admin, error) {
+	s := a.Snap.Load()
+	if s == nil {
+		return nil, ErrUnauthenticated
+	}
+	token, ok := bearer(r)
+	if !ok {
+		return nil, unauthenticated("no bearer credential")
+	}
+	t, ok := s.AdminTokens[HashKey(token)]
+	if !ok {
+		return nil, unauthenticated("unknown admin token")
+	}
+	return &Admin{TokenID: t.ID}, nil
+}
+
 // Identity is the authenticated principal, the input to every later decision.
 type Identity struct {
 	// KeyID identifies the API key, when one was used.
@@ -123,12 +150,26 @@ func HashKey(key string) string {
 // KeyPrefix marks Tavian API keys so they are easy to spot in secret scanners.
 const KeyPrefix = "tav_"
 
+// AdminTokenPrefix marks the tokens of the administration API, which are not
+// interchangeable with API keys.
+const AdminTokenPrefix = "tavadm_"
+
 // GenerateKey returns a new random API key and the config value to store for it.
 func GenerateKey() (key, configHash string, err error) {
+	return generate(KeyPrefix)
+}
+
+// GenerateAdminToken returns a new random administration token and the config
+// value to store for it.
+func GenerateAdminToken() (token, configHash string, err error) {
+	return generate(AdminTokenPrefix)
+}
+
+func generate(prefix string) (secret, configHash string, err error) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", "", fmt.Errorf("generate key: %w", err)
 	}
-	key = KeyPrefix + base64.RawURLEncoding.EncodeToString(b[:])
-	return key, "sha256:" + HashKey(key), nil
+	secret = prefix + base64.RawURLEncoding.EncodeToString(b[:])
+	return secret, "sha256:" + HashKey(secret), nil
 }

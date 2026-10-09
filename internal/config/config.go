@@ -93,6 +93,9 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	Docs     DocsConfig     `yaml:"docs"`
 	OIDC     OIDCConfig     `yaml:"oidc"`
+	// Admin holds the credentials of the administration API (docs/ADMIN_API.md).
+	// They are separate from the API keys and tokens of the data plane.
+	Admin AdminConfig `yaml:"admin"`
 	// Inspection configures content inspection (SECURITY.md). It is on by
 	// default.
 	Inspection inspect.Config `yaml:"inspection"`
@@ -374,6 +377,19 @@ type APIKey struct {
 	// MaxClassification is the most sensitive label of data this application
 	// is cleared to send (default internal). Enforced by the content policy.
 	MaxClassification Classification `yaml:"max_classification"`
+}
+
+// AdminConfig configures the administration API on the admin listener. Without
+// tokens the API is not served at all.
+type AdminConfig struct {
+	Tokens []AdminToken `yaml:"tokens"`
+}
+
+// AdminToken is one credential of the administration API. Its id names the
+// administrator or the tool in the record of every change it makes.
+type AdminToken struct {
+	ID   string `yaml:"id"`
+	Hash string `yaml:"hash"` // "sha256:<64 hex>", from `tavian keygen -admin`
 }
 
 // Load reads and parses the configuration file, returning the raw bytes too

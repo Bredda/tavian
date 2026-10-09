@@ -1,0 +1,194 @@
+openapi: 3.1.0
+info:
+  title: Tavian administration API
+  version: "{{VERSION}}"
+  summary: Control plane of a Tavian gateway.
+  description: |
+    The administration API is served on the **admin listener** (by default
+    `127.0.0.1:9090`, keep it on a private interface) under `/admin/v1`. It is
+    not served at all until at least one token is listed in `admin.tokens`.
+
+    ## Authentication
+
+    Send `Authorization: Bearer tavadm_...`. Administration tokens are separate
+    from the API keys and OIDC tokens of the data plane: neither is accepted
+    here, and a token from here is not accepted there. Create one with
+    `tavian keygen -admin`, put its hash in `admin.tokens` with an `id`, and
+    reload. The `id` is the author named in the record of every change.
+
+    ## Changes are recorded before they happen
+
+    Every call that changes (or tries to change) something is written to the
+    database with its author, address, time and outcome, and to the audit
+    chain, **before** it takes effect. If that cannot be done the call answers
+    `503 audit_unavailable` and nothing changes. Read the history with
+    `GET /admin/v1/changes`.
+
+    ## Errors
+
+    Errors have the shape `{"error": {"code": "...", "message": "..."}}`. The
+    `code` is stable. Every response carries `X-Request-Id`; send your own
+    (8 to 64 characters from `A-Za-z0-9._-`) to correlate calls.
+servers:
+  - url: http://127.0.0.1:9090
+    description: The admin listener
+security:
+  - adminToken: []
+tags:
+  - name: Identity
+  - name: Configuration
+  - name: History
+paths:
+  /admin/v1/whoami:
+    get:
+      tags: [Identity]
+      operationId: whoami
+      summary: Who the gateway thinks you are
+      responses:
+        "200":
+          description: The id of the token you used.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actor, method]
+                properties:
+                  actor: { type: string, examples: [ops-alice] }
+                  method: { type: string, enum: [admin_token] }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+  /admin/v1/config:
+    get:
+      tags: [Configuration]
+      operationId: showConfig
+      summary: The running configuration revision
+      description: A summary of what is running now. Nothing secret is returned.
+      responses:
+        "200":
+          description: The running revision.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revision, profile, models, backends, api_keys, admin_tokens, policies, warnings]
+                properties:
+                  revision: { type: string, description: Identifies the configuration and its policy files. }
+                  profile: { type: string, examples: [standard] }
+                  models: { type: integer }
+                  backends: { type: integer }
+                  api_keys: { type: integer }
+                  admin_tokens: { type: integer }
+                  policies: { type: integer, description: Number of policy files. }
+                  warnings:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+  /admin/v1/config/reload:
+    post:
+      tags: [Configuration]
+      operationId: reloadConfig
+      summary: Read the configuration file again
+      description: |
+        Does what `SIGHUP` does: compile the configuration file and its policy
+        files, and switch to the result if it is valid. The change is recorded
+        first. A configuration that is invalid, or that changes a setting which
+        needs a restart, is refused and the running revision stays.
+      responses:
+        "200":
+          description: The new revision is running (it equals the previous one when the file did not change).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revision, previous]
+                properties:
+                  revision: { type: string }
+                  previous: { type: string }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "422":
+          description: The configuration is invalid or cannot be applied to a running gateway. Nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: The change could not be recorded (`audit_unavailable`) or the file could not be read (`unavailable`). Nothing changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /admin/v1/changes:
+    get:
+      tags: [History]
+      operationId: listChanges
+      summary: What the administrators changed
+      description: Newest first. Each record is also in the audit chain, which `tavian verify-audit` checks.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+        - name: before
+          in: query
+          description: The `next` value of the previous page.
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of changes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [changes]
+                properties:
+                  changes:
+                    type: array
+                    items: { $ref: "#/components/schemas/Change" }
+                  next:
+                    type: string
+                    description: Pass it as `before` for the following page. Absent on the last page.
+        "400":
+          description: A parameter is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503":
+          description: The history cannot be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+      description: A token of `admin.tokens` (`tavadm_...`), not a data-plane API key.
+  responses:
+    Unauthenticated:
+      description: The token is missing or unknown.
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, examples: [unauthenticated] }
+            message: { type: string }
+    Change:
+      type: object
+      required: [event_id, occurred_at, actor, action, outcome]
+      properties:
+        event_id: { type: string, description: The id of the record in the audit chain. }
+        occurred_at: { type: string, format: date-time }
+        actor: { type: string, description: The id of the admin token, or `sighup` for a reload by signal. }
+        action: { type: string, examples: [config.reload] }
+        target: { type: string, description: What the change applies to (a revision). }
+        outcome: { type: string, enum: [applied, rejected] }
+        request_id: { type: string }
+        remote_addr: { type: string }
+        detail: { type: object, description: Facts about the change; never secrets or request content. }

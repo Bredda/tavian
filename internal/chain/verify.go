@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -259,8 +260,8 @@ WHERE c.position > $1 ORDER BY c.position LIMIT $2`, after, pageSize)
 				if got, err := ContentHash([]byte(*payload)); err != nil || !bytes.Equal(got, content) {
 					rep.problem(pos, id, "the record in the outbox does not match its hash: it was altered")
 				}
-				if *kind != KindDecision {
-					rep.problem(pos, id, "the outbox row is of kind %q, not a decision record", *kind)
+				if !slices.Contains(chained, *kind) {
+					rep.problem(pos, id, "the outbox row is of kind %q, which the chain does not cover", *kind)
 				}
 				if oat != nil && oat.UnixMicro() != at.UnixMicro() {
 					rep.problem(pos, id, "the time of the outbox row differs from the chained one")
@@ -289,14 +290,14 @@ WHERE c.position > $1 ORDER BY c.position LIMIT $2`, after, pageSize)
 	return nil
 }
 
-// completeness looks for decision records that should be in the chain and are
+// completeness looks for records that should be in the chain and are
 // not: the sealer's cursor is past them.
 func completeness(ctx context.Context, pool *pgxpool.Pool, rep *Report) error {
 	rs, err := pool.Query(ctx, `
 SELECT o.event_id FROM outbox o, outbox_consumers k
-WHERE k.name = $1 AND o.kind = $2 AND (o.xid, o.seq) <= (k.last_xid::text::xid8, k.last_seq)
+WHERE k.name = $1 AND o.kind = ANY($2::text[]) AND (o.xid, o.seq) <= (k.last_xid::text::xid8, k.last_seq)
   AND NOT EXISTS (SELECT 1 FROM audit_chain c WHERE c.event_id = o.event_id)
-ORDER BY o.xid, o.seq LIMIT $3`, ConsumerName, KindDecision, maxProblems)
+ORDER BY o.xid, o.seq LIMIT $3`, ConsumerName, chained, maxProblems)
 	if err != nil {
 		return fmt.Errorf("check completeness: %w", err)
 	}
@@ -306,7 +307,7 @@ ORDER BY o.xid, o.seq LIMIT $3`, ConsumerName, KindDecision, maxProblems)
 			rs.Close()
 			return fmt.Errorf("check completeness: %w", err)
 		}
-		rep.problem(0, id, "decision record is not in the chain although the sealer passed it")
+		rep.problem(0, id, "record is not in the chain although the sealer passed it")
 	}
 	rs.Close()
 	if err := rs.Err(); err != nil {
@@ -315,9 +316,9 @@ ORDER BY o.xid, o.seq LIMIT $3`, ConsumerName, KindDecision, maxProblems)
 	var n int64
 	err = pool.QueryRow(ctx, `
 SELECT count(*) FROM outbox o
-WHERE o.kind = $2 AND NOT EXISTS (SELECT 1 FROM audit_chain c WHERE c.event_id = o.event_id)
+WHERE o.kind = ANY($2::text[]) AND NOT EXISTS (SELECT 1 FROM audit_chain c WHERE c.event_id = o.event_id)
   AND NOT EXISTS (SELECT 1 FROM outbox_consumers k WHERE k.name = $1 AND (o.xid, o.seq) <= (k.last_xid::text::xid8, k.last_seq))`,
-		ConsumerName, KindDecision).Scan(&n)
+		ConsumerName, chained).Scan(&n)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("check completeness: %w", err)
 	}

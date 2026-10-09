@@ -657,3 +657,82 @@ func TestRetentionIsMentionedWhenNotAccepted(t *testing.T) {
 		t.Fatalf("warnings = %v", rep.Warnings)
 	}
 }
+
+func (e *env) adminChange(id string, outcome string) {
+	e.t.Helper()
+	err := e.st.RecordAdminChange(context.Background(), store.AdminChange{
+		EventID: id, OccurredAt: time.Now().UTC().Truncate(time.Microsecond), Actor: "ops-alice", Action: "config.reload",
+		Target: "rev-" + id, Outcome: outcome, RequestID: "req-" + id, RemoteAddr: "10.0.0.1",
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func TestTheChainCoversTheKindTheStoreWrites(t *testing.T) {
+	if KindAdminChange != store.KindAdminChange {
+		t.Errorf("chain kind %q, store kind %q", KindAdminChange, store.KindAdminChange)
+	}
+}
+
+func TestAdminChangesAreChainedWithTheDecisionRecords(t *testing.T) {
+	e := newEnv(t, true)
+	e.decisions(2, "d")
+	e.adminChange("a-1", store.OutcomeApplied)
+	e.decisions(1, "e")
+	e.adminChange("a-2", store.OutcomeRejected)
+	e.chained(5)
+	rep := e.verify(Options{})
+	if !rep.OK() || rep.Entries != 5 {
+		t.Fatalf("report: %s", problems(rep))
+	}
+	var n int
+	if err := e.st.Pool().QueryRow(context.Background(), `SELECT count(*) FROM audit_chain WHERE event_id IN ('a-1', 'a-2')`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("admin changes in the chain = %d (%v), want 2", n, err)
+	}
+}
+
+func TestAnEditedOrRemovedAdminChangeIsFound(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tamper func(e *env)
+		want   string
+	}{
+		"edited": {
+			func(e *env) {
+				e.exec(`UPDATE outbox SET payload = jsonb_set(payload, '{actor}', '"someone-else"') WHERE event_id = 'a-1'`)
+			},
+			"does not match its hash",
+		},
+		"removed": {
+			func(e *env) { e.exec(`DELETE FROM outbox WHERE event_id = 'a-1'`) },
+			"no longer in the outbox",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, true)
+			e.decisions(2, "d")
+			e.adminChange("a-1", store.OutcomeApplied)
+			e.chained(3)
+			if rep := e.verify(Options{}); !rep.OK() {
+				t.Fatalf("untouched chain: %s", problems(rep))
+			}
+			tc.tamper(e)
+			rep := e.verify(Options{})
+			if rep.OK() || !strings.Contains(problems(rep), tc.want) {
+				t.Errorf("problems = %q, want %q", problems(rep), tc.want)
+			}
+		})
+	}
+}
+
+func TestAnAdminChangeMissingFromTheChainIsFound(t *testing.T) {
+	e := newEnv(t, false)
+	e.decisions(1, "d")
+	e.adminChange("a-1", store.OutcomeApplied)
+	e.chained(2)
+	e.exec(`DELETE FROM audit_chain WHERE event_id = 'a-1'`)
+	rep := e.verify(Options{})
+	if rep.OK() || !strings.Contains(problems(rep), "not in the chain") {
+		t.Errorf("problems = %q", problems(rep))
+	}
+}

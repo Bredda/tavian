@@ -177,6 +177,14 @@ models:
         #   method: estimated             # estimated | benchmark | measured
         #   confidence: low               # low | medium | high
 
+# The administration API (docs/ADMIN_API.md) is served on listen.admin once a
+# token is listed, and needs the database. `tavian keygen -admin` makes one;
+# the id names the author of every change in the audit trail.
+# admin:
+#   tokens:
+#     - id: ops-alice
+#       hash: sha256:REPLACE_WITH_OUTPUT_OF_tavian_keygen_-admin
+
 api_keys:
   - id: research-app
     hash: sha256:REPLACE_WITH_OUTPUT_OF_tavian_keygen

@@ -1,0 +1,18 @@
+# Mutants for internal/admin, see scripts/mutate.sh.
+# file	old	new
+internal/admin/admin.go	if !Enabled(a.Snap) {	if !Enabled(a.Snap) && false {
+internal/admin/admin.go	call{actor: who.TokenID,	call{actor: who.TokenID + "x",
+internal/admin/admin.go	case recordErr != nil:	case false:
+internal/admin/admin.go	"", store.OutcomeRejected,	"", store.OutcomeApplied,
+internal/admin/admin.go	status = http.StatusUnprocessableEntity	status = http.StatusBadRequest
+internal/admin/admin.go	n < 1 || n > 500	n < 1 || n > 5000
+internal/admin/admin.go	err != nil || n < 1 {	err != nil || n < 0 {
+internal/admin/admin.go	if next > 0 {	if next >= 0 {
+internal/admin/admin.go	hd.Set("Cache-Control", "no-store")	hd.Set("Cache-Control", "no-cache")
+internal/admin/admin.go	if !ids.Valid(id) {	if ids.Valid(id) {
+internal/admin/admin.go	host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil	host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil
+internal/admin/admin.go	if a.Reload == nil {	if a.Reload != nil {
+internal/admin/admin.go	hd.Set("WWW-Authenticate", `Bearer realm="tavian-admin"`)	hd.Set("WWW-Authenticate", `Bearer`)
+internal/admin/admin.go	a.observe(ActionReload, "audit_unavailable")	a.observe(ActionReload, "failed")
+internal/admin/admin.go	if list == nil {	if false {
+internal/admin/admin.go	s != nil && len(s.AdminTokens) > 0	s != nil

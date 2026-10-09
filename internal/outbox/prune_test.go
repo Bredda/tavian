@@ -236,3 +236,21 @@ func TestOnlyOnePrunerRunsAtATime(t *testing.T) {
 		t.Fatalf("removed %v after the lock was released", n)
 	}
 }
+
+// What the administrators changed is evidence: no retention removes it, even
+// when someone asks for one.
+func TestAdminChangesAreNeverPruned(t *testing.T) {
+	e := newPruneEnv(t)
+	e.old("admin_change", 2, 1000*day, "adm")
+	e.old("usage", 1, 100*day, "old")
+	e.consume(e.fast)
+	e.consume(e.slow)
+	p := e.pruner(map[string]time.Duration{"usage": 90 * day, "decision": day, "admin_change": day})
+	n, err := p.Once(context.Background())
+	if err != nil || n["admin_change"] != 0 {
+		t.Fatalf("removed %v (%v)", n, err)
+	}
+	if left := e.remaining(); !left["adm-0"] || !left["adm-1"] {
+		t.Error("an admin change was removed")
+	}
+}
