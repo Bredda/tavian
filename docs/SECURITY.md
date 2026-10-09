@@ -140,7 +140,7 @@ Always, for every request (including refused ones): the `DecisionRecord` — ide
 | `refused` | `INVALID_REQUEST`, `REQUEST_TOO_LARGE`, `MODEL_NOT_ALLOWED`, `CLEARANCE_EXCEEDED`, `MODEL_NOT_FOUND`, `NO_ELIGIBLE_BACKEND`, `ROUTING_ASSERTION_FAILED`, `POLICY_ERROR`, `POLICY_BLOCKED` (or the `reason` of the block rule), `REDACTION_INCOMPLETE`, `REDACTION_FAILED`, `MULTIMODAL_NOT_INSPECTABLE`, `REQUEST_TOO_COMPLEX`, `INSPECTION_FAILED`, `UPSTREAM_UNAVAILABLE` |
 | `failed` | `UPSTREAM_ERROR` (the backend answered with an error status), `STREAM_INTERRUPTED`, `CLIENT_DISCONNECTED` |
 
-Reason codes are stable; the OpenAI-compatible error `code` that SDKs see (`model_not_allowed`, …) is unchanged. Spooled records that cannot be read back are set aside in `events.rejected` and counted (`tavian_spool_rejected_records_total`), never dropped. The hash chain over these records is the next step ([roadmap](ROADMAP.md)).
+Reason codes are stable; the OpenAI-compatible error `code` that SDKs see (`model_not_allowed`, …) is unchanged. Spooled records that cannot be read back are set aside in `events.rejected` and counted (`tavian_spool_rejected_records_total`), never dropped. The hash chain over these records is described below and in [AUDIT.md](AUDIT.md).
 
 Optionally, per policy, the **content** at one of four levels:
 
@@ -155,9 +155,10 @@ Default: `hash`. Storing content is a conscious, policy-level decision with a ma
 
 ### Integrity
 
-- Audit records are append-only and linked by a **hash chain** (each record includes the hash of the previous one) per chain segment.
-- Segments are periodically **sealed and signed**; seals can be exported to an independent location (offline media, a separate system) so that tampering by someone with database access is detectable.
-- `tavian verify-audit` recomputes the chain and verifies signatures. Auditors get a read-only role.
+- Audit records are append-only and linked by a **hash chain** (each entry commits to the record and to the previous entry), built by an outbox consumer. *Built; see [AUDIT.md](AUDIT.md).*
+- The chain is periodically **sealed and signed** (Ed25519, key outside the database); seals can be exported to an independent location (offline media, a separate system) so that tampering by someone with database access is detectable. *Built.*
+- `tavian verify-audit` recomputes the chain and verifies signatures and exported seals. Auditors need only a read-only database role. *Built.*
+- Not yet: segments of the outbox pruned after sealing (step 2.6b), a signing key in a KMS or HSM, automatic export of seals.
 
 ### Confidentiality and erasure
 

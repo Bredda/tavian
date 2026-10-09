@@ -561,3 +561,20 @@ func TestPendingRecordsAreNotAProblem(t *testing.T) {
 		t.Fatalf("%s (pending %d)", problems(rep), rep.Pending)
 	}
 }
+
+// A seal changed in the database is caught by its exported copy even when no
+// key is at hand to check signatures.
+func TestAnchorsDetectASealChangedInTheDatabase(t *testing.T) {
+	e := newEnv(t, true)
+	e.decisions(6, "d")
+	e.chained(6)
+	anchors, _ := Seals(context.Background(), e.st.Pool())
+	e.exec(`UPDATE audit_seals SET sealed_at = sealed_at + interval '1 day' WHERE id = 1`)
+	rep, err := Verify(context.Background(), e.st.Pool(), Options{Anchors: anchors}) // no keys
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.OK() || !strings.Contains(problems(rep), "differs from the copy") {
+		t.Fatalf("problems = %s", problems(rep))
+	}
+}
