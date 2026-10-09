@@ -63,7 +63,7 @@ Every answer carries an `X-Tavian-Decision-Id` header, and the decision record i
 ```bash
 docker compose -f deploy/compose/docker-compose.yml exec tavian /app verify-audit -public-key ed25519:...
 ```
- The keys above are public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
+ The keys above are public and for the demo only (`tavian keygen` makes real ones). To play the same scenario from a GUI, open [bruno/](bruno/) with Bruno (environment `demo-0.2.0`). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
 
 ### Sign in with OIDC
 

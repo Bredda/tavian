@@ -1,0 +1,35 @@
+meta {
+  name: 01 Ordinary data follows the route
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{financeKey}}
+}
+
+body:json {
+  {
+    "model": "demo-shared",
+    "max_tokens": 20,
+    "messages": [
+      { "role": "user", "content": "Summarise the quarterly meeting notes" }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.x_mock_backend: eq partner-eu
+}
+
+docs {
+  `demo-shared` is served by the approved external provider first, then by
+  the on-prem backend. Nothing sensitive in the prompt: the first route wins.
+}

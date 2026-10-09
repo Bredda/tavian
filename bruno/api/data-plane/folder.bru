@@ -1,0 +1,17 @@
+meta {
+  name: data plane
+  seq: 2
+}
+
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{apiKey}}
+}
+
+docs {
+  The OpenAI-compatible API (`dataUrl`). The key is `apiKey` of the
+  environment: a `tav_...` API key or an OIDC access token.
+}

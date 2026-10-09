@@ -1,0 +1,30 @@
+meta {
+  name: Chat completion (streaming)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "model": "{{model}}",
+    "stream": true,
+    "messages": [
+      { "role": "user", "content": "Count to three." }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  `text/event-stream` of `chat.completion.chunk` objects ending with
+  `data: [DONE]`.
+}

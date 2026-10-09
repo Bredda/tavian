@@ -1,0 +1,49 @@
+meta {
+  name: 02 An IBAN is answered by the on-prem model
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{financeKey}}
+}
+
+body:json {
+  {
+    "model": "demo-shared",
+    "max_tokens": 20,
+    "messages": [
+      { "role": "user", "content": "Transfer 100 EUR to {{iban}}" }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.x_mock_backend: eq on-prem
+}
+
+script:post-response {
+  bru.setVar("ibanDecisionId", res.getHeader("x-tavian-decision-id"));
+}
+
+docs {
+  The IBAN makes the request `confidential`: the finance key is cleared for
+  that, and only the on-prem backend may receive it, although the external
+  one comes first in the route.
+
+  The decision record (confidential, internal only, on-prem, with a cost,
+  and the IBAN finding, never the IBAN itself). `DECISION_ID` is the
+  `X-Tavian-Decision-Id` of the answer (kept in `ibanDecisionId`):
+
+  ```
+  docker compose -f deploy/compose/docker-compose.yml exec postgres psql -U tavian -d tavian -c \
+    "select payload->>'label' as label, payload->'constraints' as constraints, payload->>'backend' as backend, payload->'cost' as cost, payload->'findings' as findings from outbox where event_id='$DECISION_ID'"
+  ```
+}

@@ -1,0 +1,20 @@
+meta {
+  name: List models
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{dataUrl}}/v1/models
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 200
+  res.body.object: eq list
+}
+
+docs {
+  The models the calling key is allowed to use.
+}

@@ -1,0 +1,36 @@
+meta {
+  name: demo 0.2.0
+  seq: 1
+}
+
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{demoKey}}
+}
+
+docs {
+  The scenario of `scripts/demo-e2e.sh`, one request at a time. Select the
+  environment **demo-0.2.0** and start the demo stack:
+
+  ```
+  make demo        # or: scripts/demo-e2e.sh with KEEP=1
+  ```
+
+  The keys (`demoKey`, `financeKey`) are public and for the demo only. The
+  requests run in order; 02, 03 and 07 keep the decision id of the
+  answer in `ibanDecisionId`, `refusedDecisionId` and `shadowDecisionId`.
+
+  What HTTP cannot show (the decision records in PostgreSQL) is given as
+  commands in the docs of the requests concerned.
+
+  The audit chain is sealed every 100 records. After enough requests, check
+  it with the public key of the demo (`docker compose ... run --rm audit-key`
+  prints it):
+
+  ```
+  docker compose -f deploy/compose/docker-compose.yml exec tavian /app verify-audit -public-key ed25519:...
+  ```
+}

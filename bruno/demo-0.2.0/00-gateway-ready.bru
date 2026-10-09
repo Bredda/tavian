@@ -1,0 +1,15 @@
+meta {
+  name: 00 The gateway is ready
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{adminUrl}}/readyz
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}

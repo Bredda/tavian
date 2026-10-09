@@ -1,0 +1,20 @@
+meta {
+  name: Metrics
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{adminUrl}}/metrics
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Prometheus text format: request counts and latencies, token counters,
+  storage and spool state.
+}
