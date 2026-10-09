@@ -61,4 +61,6 @@ If this scenario works end to end, the core thesis is proven:
 
 > The **finance** team calls the gateway with an internal app. A request contains an IBAN. The inspector flags it, the classification becomes `confidential`, policy restricts destinations to `internal`, and the request is routed to the on-prem vLLM — even though the client asked for a model that also exists on an external provider. An external-only model request from the same team is refused with an explainable reason. The team's quota is decremented. An auditor opens the audit trail, sees the decision with the matching rule and findings, the cost in €, Wh and gCO₂e, and verifies the chain has not been tampered with.
 
+This scenario is a test, run on every change: [`e2e/demo_test.go`](../e2e/demo_test.go) against the real binaries and PostgreSQL with the configuration and policies of the demo stack, and [`scripts/demo-e2e.sh`](../scripts/demo-e2e.sh) against `docker compose` itself.
+
 Every milestone in the [roadmap](ROADMAP.md) is measured against getting closer to this scenario.
