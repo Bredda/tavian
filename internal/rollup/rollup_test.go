@@ -97,8 +97,6 @@ FROM usage_hourly WHERE hour = $1 AND team = $2 AND principal = $3`, hour, team,
 	return r, err == nil
 }
 
-func hourOf(t time.Time) time.Time { return t.UTC().Truncate(time.Hour) }
-
 func TestEventsAreSummedByTheHour(t *testing.T) {
 	e := newEnv(t)
 	h := time.Date(2026, 3, 10, 14, 0, 0, 0, time.UTC)
@@ -204,6 +202,7 @@ func TestTokensTodayAreTheRolledUpSumsPlusTheTail(t *testing.T) {
 	e.catchUp()                                                // these are rolled up
 	e.usage(now, ev{"input_tokens": 100, "output_tokens": 50}) // not yet
 	e.usage(now, ev{"team": "research", "application": "chat", "input_tokens": 1, "output_tokens": 1})
+	e.usage(startOfDay.Add(-time.Minute), ev{"input_tokens": 5000, "output_tokens": 5000}) // yesterday, not rolled up either
 	waitFinal(t, e.st)
 
 	used, err := TokensToday(context.Background(), e.st.Pool(), now)
@@ -308,5 +307,25 @@ func TestSeededDayRollsOverLikeAnyOther(t *testing.T) {
 	clk = clk.Add(25 * time.Hour)
 	if _, res := store.Reserve(lim, 100); res.Refused {
 		t.Fatal("seeded usage survived the day")
+	}
+}
+
+// The cursor can stop on an event (a full batch): that event is rolled up and
+// must not be counted again from the tail.
+func TestTokensTodayWhenTheCursorStopsOnAnEvent(t *testing.T) {
+	e := newEnv(t)
+	e.runner.BatchSize = 2
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		e.usage(now, ev{"input_tokens": 10, "output_tokens": 0})
+	}
+	waitFinal(t, e.st)
+	cy, more := e.runner.Step(context.Background(), e.c)
+	if cy.Err != nil || cy.Handled != 2 || !more {
+		t.Fatalf("setup: %+v", cy)
+	}
+	used, err := TokensToday(context.Background(), e.st.Pool(), now)
+	if err != nil || total(used) != 30 {
+		t.Fatalf("used = %d (%v), want 30: two rolled up, one in the tail, none twice", total(used), err)
 	}
 }

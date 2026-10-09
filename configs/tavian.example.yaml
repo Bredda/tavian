@@ -94,6 +94,16 @@ log:
 #   poll_interval: 1s
 #   batch_size: 500
 
+# How long events stay in the database. Usage events are summed by the hour first
+# (usage_hourly), so their totals outlive them. Decision records are never removed
+# unless decision_days is set, and then only once a signed seal covers them. 0 keeps
+# for ever. See docs/AUDIT.md. Changing it needs a restart.
+# outbox:
+#   retention:
+#     usage_days: 90
+#     decision_days: 0
+#   prune_every: 1h
+
 # Quotas are set in policies (spec.quotas). This only tunes how tokens are
 # reserved: a request that sets no max_tokens is assumed to need this many
 # tokens for its answer. What the answer really holds is counted when it ends,

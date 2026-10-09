@@ -61,7 +61,7 @@ The only code path that opens outbound connections: to model backends, to the id
 In-process pipeline of local detectors producing *findings* and a *classification label*. See [SECURITY.md](SECURITY.md#content-inspection).
 
 ### Events
-Usage events and audit records are written to an **outbox table in PostgreSQL** in the same transaction domain as the decision log, then consumed by workers (hash-chain sealing is built; aggregation and export come next). Consumers keep a cursor in PostgreSQL that moves in the same transaction as their effects, run on one instance at a time, and read rows in the order of the transactions that wrote them (`internal/outbox`, [ADR-0010](adr/0010-transactional-outbox-no-broker.md)); the audit chain is described in [AUDIT.md](AUDIT.md). No message broker in the baseline ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)).
+Usage events and audit records are written to an **outbox table in PostgreSQL** in the same transaction domain as the decision log, then consumed by workers (hash-chain sealing and hourly usage sums are built; export comes next). Consumers keep a cursor in PostgreSQL that moves in the same transaction as their effects, run on one instance at a time, and read rows in the order of the transactions that wrote them (`internal/outbox`, [ADR-0010](adr/0010-transactional-outbox-no-broker.md)); the audit chain is described in [AUDIT.md](AUDIT.md). No message broker in the baseline ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)).
 
 ## 4. Request lifecycle
 
@@ -180,7 +180,8 @@ internal/policy/           ✓ YAML + CEL evaluation, baseline policy, scopes, a
 internal/pipeline/         ✓ the decision steps (model authorization, policy, clearance, routing, phase B) shared by the gateway and `policy test`
 internal/quota/            ✓ admission, reserve/settle, in-memory counters, refusal coalescing (shared counters: M3)
 internal/audit/            ✓ decision records and reason codes (encryption: M4)
-internal/outbox/           ✓ consumers of the outbox: cursors, one runner per consumer, xid horizon
+internal/outbox/           ✓ consumers of the outbox: cursors, one runner per consumer, xid horizon; the pruner (retention)
+internal/rollup/           ✓ hourly usage sums (usage_hourly) and the rebuild of daily token counters
 internal/chain/            ✓ audit hash chain, signed seals, verification (`tavian verify-audit`)
 internal/admin/            · control-plane API (M3)
 internal/store/            ✓ PostgreSQL access (pgx): embedded migrations, outbox, config revisions
