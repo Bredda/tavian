@@ -111,13 +111,13 @@ api_keys:
 
 	// Changing the database section needs a restart: the revision must not move.
 	t.Setenv("TAVIAN_RELOAD_TEST_DB", "postgres://x")
-	reload(context.Background(), log, write("database:\n  url_env: TAVIAN_RELOAD_TEST_DB\n"), cfg, holder, nil)
+	reload(context.Background(), log, write("database:\n  url_env: TAVIAN_RELOAD_TEST_DB\n"), cfg, holder, nil, nil)
 	if holder.Load() != snap {
 		t.Error("reload with a changed database section was applied")
 	}
 
 	// An unrelated, valid change is applied.
-	reload(context.Background(), log, write("log: {level: debug}\n"), cfg, holder, nil)
+	reload(context.Background(), log, write("log: {level: debug}\n"), cfg, holder, nil, nil)
 	if holder.Load() == snap {
 		t.Error("valid reload was not applied")
 	}
