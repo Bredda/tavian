@@ -58,7 +58,7 @@ Gaps found when comparing [SECURITY.md](SECURITY.md) with the code, closed first
 > *The scenario from VISION.md, end to end.*
 
 - Model catalog, Backends with destination class + max classification, two backends (internal + a mock "external")
-- Teams, applications, RBAC roles
+- Teams and applications (from API keys and OIDC group mappings); roles come with the admin API in M3
 - Policy engine: YAML + CEL, default deny, narrowing-only, two-phase evaluation, decision records
 - L0 + L1 inspection: PII (IBAN, cards, NIR, email, phone), secrets, custom dictionaries; classification; actions `block/redact/flag/restrict_destinations`
 - Egress guard and the three deployment profiles
@@ -82,7 +82,9 @@ Progress:
 - [x] Outbox worker framework (consumer cursors, one instance per consumer, rows read in transaction order), hash chain over decision records, signed seals, `tavian audit-keygen` and `tavian verify-audit` ([AUDIT.md](AUDIT.md))
 - [x] Outbox retention (rows older than their retention and read by every consumer; decision records only under a signed seal; chain and seals kept; every removal logged for `verify-audit`) and a minimal hourly usage rollup that also rebuilds the daily token counters, closing the M1 item on consumers and retention ([AUDIT.md](AUDIT.md#retention))
 - [x] Prices, energy profiles and carbon intensities in the configuration; cost, energy and carbon in usage events (with the figures they were computed from), decision records (chained), hourly sums and metrics; the `budget_eur` quota (monthly, UTC) reserved at the chosen backend's price ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#cost-energy-and-carbon-in-main))
-- [ ] End-to-end finance demo test in CI
+- [x] End-to-end finance demo test in CI: the scenario of [VISION.md](VISION.md) against the real binaries and PostgreSQL (`e2e/`, in the test job) and against the docker compose stack as shipped (`scripts/demo-e2e.sh`, the `demo` job)
+
+_M2 ships as v0.2.0._
 
 ## M3 — Operability
 

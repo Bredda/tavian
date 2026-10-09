@@ -12,7 +12,8 @@ make lint        # golangci-lint
 make build       # binaries in ./bin
 make demo        # gateway + PostgreSQL + mock backend on localhost:8080, see README
 make conformance # official OpenAI Python/Node SDKs against the gateway (needs Python 3, Node 20+)
-make test-db     # tests incl. PostgreSQL integration (needs Docker); plain `make test` skips them
+make test-db     # tests incl. PostgreSQL integration and the demo scenario on the binaries (needs Docker); plain `make test` skips them
+make demo-e2e    # the same scenario against the docker compose stack as it ships (needs Docker)
 ```
 
 The API reference is `internal/docs/openapi.yaml` (hand-written; a test checks that its operations are routed, so update it with any API change) plus a vendored Scalar bundle, refreshed with `scripts/update-scalar.sh <version>`.

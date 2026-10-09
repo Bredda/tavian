@@ -80,6 +80,10 @@ jobs:
         run: go test -race -count=1 -coverprofile=coverage.out ./...
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -n 1
+      # On its own, after the rest: it compiles the gateway, which would make
+      # the timing-sensitive tests above flaky if they ran at the same time.
+      - name: Demo scenario on the binaries (e2e)
+        run: go test -tags e2e -race -count=1 ./e2e
 
   # The official OpenAI Python and Node SDKs against a real gateway in front of
   # the mock backend (conformance/README.md).
@@ -132,6 +136,18 @@ jobs:
         run: |
           docker build --build-arg CMD=tavian -t tavian:ci .
           docker build --build-arg CMD=mockllm -t tavian-mockllm:ci .
+
+  # The scenario of docs/VISION.md against the demo stack as it ships: real images,
+  # volumes, read-only file systems and key permissions (scripts/demo-e2e.sh).
+  # The same scenario runs against the binaries in the test job (e2e/).
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Demo scenario (docker compose)
+        run: scripts/demo-e2e.sh
 
   workflows:
     runs-on: ubuntu-latest

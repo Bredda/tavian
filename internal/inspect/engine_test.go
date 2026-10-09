@@ -21,7 +21,7 @@ func text(s ...string) Request {
 
 func newTestEngine(t *testing.T) *Engine {
 	t.Helper()
-	e, err := New(Config{FingerprintKeyEnv: "K"}, func(string) string { return string(testKey) })
+	e, err := New(Config{FingerprintKeyEnv: "K", Budget: 10 * time.Second}, func(string) string { return string(testKey) }) // these tests are about what is found, not how fast
 	if err != nil {
 		t.Fatal(err)
 	}

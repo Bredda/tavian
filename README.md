@@ -2,7 +2,7 @@
 
 **Sovereign LLM gateway.** Identity, content security, policy, quotas, metering and audit for LLM access inside organizations that cannot afford to lose control of their data.
 
-> **Status: pre-alpha.** v0.1.0 is the walking skeleton (see [what works today](#what-works-today-v010)): identity, an OpenAI-compatible API and metering run end to end. Content inspection, policy and quotas, which are what the project is about, are designed but not built yet. The design documents below are drafts meant to be challenged.
+> **Status: pre-alpha.** The scenario that defines the project works end to end ([what works today](#what-works-today)): a finance application sends an IBAN, the gateway recognises it, classifies the request `confidential`, keeps it on the on-prem model although an external provider serves the same model name, refuses the external-only model with an explainable reason, counts the quota and the cost in euros, watt-hours and grams of CO₂e, and records a tamper-evident audit trail that `tavian verify-audit` checks. It is tested on every change, against the real binaries and against the demo stack ([`e2e/`](e2e/demo_test.go), [`scripts/demo-e2e.sh`](scripts/demo-e2e.sh)). APIs and configuration may still change; the design documents below are drafts meant to be challenged.
 
 ## What it is
 
@@ -77,9 +77,18 @@ curl -s localhost:8080/v1/models -H "Authorization: Bearer $(make -s demo-token 
 
 Keycloak takes about 30 seconds to start; the gateway retries fetching its signing keys until it is up. Any OIDC provider works the same way, see the `oidc` section of the example configuration.
 
-## What works today (main, after v0.1.0)
+## What works today
 
-API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection looks for PII (e-mail, IBAN, payment cards, French NIR, phone, IPv4), secrets and your own dictionaries and patterns in everything a request carries, fails closed, and records findings (never the matched text) in the usage event; it observes only for now. Quotas (requests, concurrency and tokens, set in policies) answer 429 with `Retry-After`. Decision records are chained and sealed, and `tavian verify-audit` checks them ([docs/AUDIT.md](docs/AUDIT.md)). Requests are priced from the prices you configure, with energy and carbon estimated from profiles and intensities you enter (labelled as estimates), and a monthly `budget_eur` quota can cap the spending ([docs/QUOTAS_AND_METERING.md](docs/QUOTAS_AND_METERING.md)). See the [roadmap](docs/ROADMAP.md) and [docs/INSPECTION.md](docs/INSPECTION.md).
+- **API and identity.** `POST /v1/chat/completions` (streaming included) and `GET /v1/models`, OpenAI-compatible, checked with the official Python and Node SDKs. API keys with per-key model lists and clearances, or sign-in with any OIDC provider (groups mapped to teams, models and clearances).
+- **Content inspection** of everything a request carries: PII (e-mail, IBAN, payment cards, French NIR, phone, IPv4), secrets, your own dictionaries and patterns. It fails closed, and findings hold positions and keyed fingerprints, never the matched text ([docs/INSPECTION.md](docs/INSPECTION.md)).
+- **Classification and routing.** Each request gets a label (`public` to `restricted`) from what the caller declares, a default and what inspection finds; it must fit the caller's clearance; the router only picks a backend whose destination class and `max_classification` allow it, and a second check asserts the choice before the call.
+- **Policies** in YAML with CEL conditions, scoped to the organization, a team or an application, narrowing only: model access, destinations, labels, and actions on findings (`block`, `redact` with verification, `restrict_destinations`, `flag`). A policy can run in shadow mode, and `tavian policy test` runs fixtures through the gateway's own decision code ([docs/POLICY.md](docs/POLICY.md)).
+- **Quotas**: requests and tokens per minute, concurrency, tokens per day, and a monthly budget in euros, reserved before the call and settled with real usage; refusals are 429 with `Retry-After` ([docs/QUOTAS_AND_METERING.md](docs/QUOTAS_AND_METERING.md)).
+- **Metering**: tokens, cost from the prices you configure, and energy and carbon estimates from profiles and intensities you enter (labelled as estimates), per request and summed by the hour.
+- **Audit**: a decision record for every authenticated request, refusals included, with a stable reason code; records are chained and sealed with Ed25519 signatures, and `tavian verify-audit` checks the chain, the seals and copies of seals kept elsewhere ([docs/AUDIT.md](docs/AUDIT.md)). The outbox is pruned by retention without losing that proof.
+- **Sovereignty.** An egress guard enforces the deployment profile (air-gapped, controlled-egress, open-egress); configuration is strict and compiled into an immutable snapshot, reloadable with `SIGHUP`; health, readiness and Prometheus metrics; an embedded API reference at `/docs`; PostgreSQL with a disk spool during outages (requests are refused if the audit trail cannot record).
+
+Not yet: response inspection, an admin API and UI, model health checks and failover, shared counters for several replicas, encryption of audit content. See the [roadmap](docs/ROADMAP.md).
 
 ## Development
 
