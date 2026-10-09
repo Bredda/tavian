@@ -13,8 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bredda/tavian/internal/cost"
 	"github.com/bredda/tavian/internal/inspect"
 	"github.com/bredda/tavian/internal/policy"
+	"github.com/bredda/tavian/internal/quota"
 )
 
 // Snapshot is an immutable, validated view of the configuration, identified by
@@ -36,6 +38,8 @@ type Snapshot struct {
 	// built-in baseline). PolicySources are the files it was built from.
 	Policy        *policy.Engine
 	PolicySources []policy.Source
+	// Warnings are problems that do not stop the configuration from loading.
+	Warnings []string
 	// Quota says how tokens are reserved against the quotas the policies set.
 	Quota QuotaConfig
 
@@ -48,6 +52,8 @@ type Snapshot struct {
 	// Endpoints is the egress allow-list: "host:port" -> destination class.
 	Endpoints map[string]DestinationClass
 }
+
+func validIntensity(v float64) bool { return v >= 0 && v <= cost.MaxIntensity && v == v }
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
@@ -152,6 +158,18 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		addf("oidc: issuer is required when any other oidc setting is present")
 	}
 
+	if v := cfg.Carbon.DefaultGPerKWh; v != nil && !validIntensity(*v) {
+		addf("carbon.default_g_per_kwh: must be between 0 and %g", cost.MaxIntensity)
+	}
+	for region, v := range cfg.Carbon.Regions {
+		if !idPattern.MatchString(region) {
+			addf("carbon.regions: region %q must match %s", region, idPattern)
+		}
+		if !validIntensity(v) {
+			addf("carbon.regions.%s: must be between 0 and %g", region, cost.MaxIntensity)
+		}
+	}
+
 	for i := range cfg.Backends {
 		b := cfg.Backends[i]
 		where := fmt.Sprintf("backends[%d]", i)
@@ -198,6 +216,15 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 			s.Endpoints[key] = b.DestinationClass
 		}
 
+		if b.Region != "" && !idPattern.MatchString(b.Region) {
+			addf("%s: region %q must match %s", where, b.Region, idPattern)
+		}
+		if v, ok := cfg.Carbon.Regions[b.Region]; b.Region != "" && ok {
+			b.CarbonGPerKWh = &v
+		} else if cfg.Carbon.DefaultGPerKWh != nil {
+			b.CarbonGPerKWh = cfg.Carbon.DefaultGPerKWh
+		}
+
 		if b.APIKeyEnv != "" {
 			if b.Credential = getenv(b.APIKeyEnv); b.Credential == "" {
 				addf("%s: environment variable %s (api_key_env) is empty or unset", where, b.APIKeyEnv)
@@ -231,6 +258,16 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 			if t.UpstreamModel == "" {
 				t.UpstreamModel = m.Name
 			}
+			if t.Price != nil {
+				if err := t.Price.Validate(); err != nil {
+					addf("%s: route[%d]: %v", where, j, err)
+				}
+			}
+			if t.Energy != nil {
+				if err := t.Energy.Validate(); err != nil {
+					addf("%s: route[%d]: %v", where, j, err)
+				}
+			}
 			route[j] = t
 		}
 		m.Route = route
@@ -238,6 +275,16 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		s.ModelNames = append(s.ModelNames, m.Name)
 	}
 	sort.Strings(s.ModelNames)
+
+	if s.Policy != nil && len(s.Policy.Scopes(quota.BudgetEUR)) > 0 {
+		for _, name := range s.ModelNames {
+			for j, t := range s.Models[name].Route {
+				if t.Price == nil {
+					s.Warnings = append(s.Warnings, fmt.Sprintf("model %q route[%d] (backend %q) has no price: what it serves does not use the budget_eur quotas", name, j, t.Backend))
+				}
+			}
+		}
+	}
 
 	for i := range cfg.APIKeys {
 		k := cfg.APIKeys[i]

@@ -21,6 +21,7 @@ import (
 	"github.com/bredda/tavian/internal/audit"
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/cost"
 	"github.com/bredda/tavian/internal/docs"
 	"github.com/bredda/tavian/internal/ids"
 	"github.com/bredda/tavian/internal/inspect"
@@ -363,7 +364,11 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	if maxOut <= 0 {
 		maxOut = snap.Quota.DefaultOutputTokens
 	}
-	reservation, reserved := s.Quota.Reserve(limits, quota.Estimate(len(upstreamBody), maxOut))
+	amount := quota.Amount{Tokens: quota.Estimate(len(upstreamBody), maxOut)}
+	if route.Price != nil { // money, at the price of the backend that was chosen
+		amount.MicroEUR = cost.EstimateMicroEUR(*route.Price, quota.Estimate(len(upstreamBody), 0), min(maxOut, 1<<40))
+	}
+	reservation, reserved := s.Quota.Reserve(limits, amount)
 	s.noteQuota(c, reserved)
 	if reserved.Refused {
 		return s.refuseQuota(ctx, w, c, reserved)
@@ -373,6 +378,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 			c.quota = &audit.Quota{}
 		}
 		c.quota.ReservedTokens = reservation.Tokens()
+		c.quota.ReservedMicroEUR = reservation.MicroEUR()
 	}
 
 	// call provider and relay the response
@@ -398,23 +404,30 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	// settle: what the answer really used replaces the reservation. When the
 	// backend reported nothing, a failure used nothing and a success keeps its
 	// estimate.
+	var priced cost.Result // what the request cost, when the backend said what it used
 	switch {
 	case res.Usage.Known:
-		used := res.Usage.Input + res.Usage.Output
+		priced = cost.Compute(cost.Usage{Input: res.Usage.Input, Output: res.Usage.Output, Cached: res.Usage.Cached},
+			route.Price, route.Energy, route.Backend.CarbonGPerKWh, route.Backend.Region)
+		used := quota.Amount{Tokens: res.Usage.Input + res.Usage.Output}
+		if priced.CostMicroEUR != nil {
+			used.MicroEUR = *priced.CostMicroEUR
+		}
 		reservation.Settle(used)
 		if t := reservation.Tokens(); t > 0 {
-			s.Metrics.quotaEstimate.Observe(float64(used) / float64(t))
+			s.Metrics.quotaEstimate.Observe(float64(used.Tokens) / float64(t))
 		}
 	case res.Status/100 != 2:
-		reservation.Settle(0)
+		reservation.Settle(quota.Amount{})
 	default:
-		reservation.Settle(reservation.Tokens())
+		reservation.Settle(quota.Amount{Tokens: reservation.Tokens(), MicroEUR: reservation.MicroEUR()})
 	}
 	rec := c.record(ctx, audit.OutcomeServed, reason, status)
 	if outcome != "ok" {
 		rec.Outcome = audit.OutcomeFailed
 	}
 	rec.UpstreamModel, rec.Backend = route.UpstreamModel, route.Backend.ID
+	rec.Cost = costOf(priced)
 	s.emitOwed(ctx, rec)
 
 	ev := s.event(ctx, c, start, outcome, res.Status)
@@ -425,6 +438,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	ev.CachedTokens = res.Usage.Cached
 	ev.ReasoningTokens = res.Usage.Reasoning
 	ev.UsageKnown = res.Usage.Known
+	ev.CostMicroEUR, ev.EnergyWh, ev.CO2eGrams, ev.Basis = priced.CostMicroEUR, priced.EnergyWh, priced.CO2eGrams, priced.Basis
 	ev.Streamed = res.Streamed
 	ev.LatencyMS = time.Since(start).Milliseconds()
 	ev.TTFBMS = res.TTFB.Milliseconds()
@@ -433,8 +447,17 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	if res.Usage.Known {
 		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "input").Add(float64(res.Usage.Input))
 		s.Metrics.tokens.WithLabelValues(model, route.Backend.ID, "output").Add(float64(res.Usage.Output))
+		s.Metrics.observeCost(model, route.Backend.ID, priced)
 	}
 	return outcome
+}
+
+// costOf is the cost section of a decision record, nil when nothing was priced.
+func costOf(r cost.Result) *audit.Cost {
+	if r.CostMicroEUR == nil && r.EnergyWh == nil && r.CO2eGrams == nil {
+		return nil
+	}
+	return &audit.Cost{MicroEUR: r.CostMicroEUR, EnergyWh: r.EnergyWh, CO2eGrams: r.CO2eGrams, Estimate: r.EnergyWh != nil}
 }
 
 // event starts the usage event of a request.

@@ -64,11 +64,25 @@ type Quota struct {
 	// ReservedTokens is what was set aside before the backend was called, in
 	// the same unit as the limits (input estimate plus the answer's cap).
 	ReservedTokens int64 `json:"reserved_tokens,omitempty"`
+	// ReservedMicroEUR is the money set aside at the price of the chosen backend.
+	ReservedMicroEUR int64 `json:"reserved_micro_eur,omitempty"`
 	// Exceeded lists the limits the request went over, whatever their effect.
 	Exceeded []QuotaCheck `json:"exceeded,omitempty"`
 	// Suppressed counts refusals of the same caller and limit, in the second
 	// before this record, that were not recorded one by one.
 	Suppressed int64 `json:"suppressed,omitempty"`
+}
+
+// Cost is what a served request cost, from the usage the backend reported and
+// the prices and profiles of the configuration revision (the usage event holds
+// the figures they were computed from). Each field is absent when its inputs
+// are not configured. Energy and carbon are estimates.
+type Cost struct {
+	MicroEUR  *int64   `json:"micro_eur,omitempty"`
+	EnergyWh  *float64 `json:"energy_wh,omitempty"`
+	CO2eGrams *float64 `json:"co2e_g,omitempty"`
+	// Estimate is true when energy and carbon are present.
+	Estimate bool `json:"estimate,omitempty"`
 }
 
 // QuotaCheck is one limit a request went over.
@@ -130,6 +144,8 @@ type DecisionRecord struct {
 	// Quota is set when quotas reserved tokens for the request or it went over
 	// a limit.
 	Quota *Quota `json:"quota,omitempty"`
+	// Cost is set on requests that reached a backend and were priced.
+	Cost *Cost `json:"cost,omitempty"`
 
 	Outcome    string `json:"outcome"`
 	ReasonCode string `json:"reason_code"`

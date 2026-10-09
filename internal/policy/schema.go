@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -83,13 +84,33 @@ type Spec struct {
 // QuotaSpec is one limit of a policy.
 type QuotaSpec struct {
 	Dimension quota.Dimension `yaml:"dimension"`
-	Limit     int64           `yaml:"limit"`
+	Limit     Whole           `yaml:"limit"`
+	// Limit is in the unit of the dimension: requests, tokens, or for budget_eur
+	// whole euros.
 	// Window is optional: each dimension has a fixed one (rpm and tpm one
-	// minute, tokens_per_day one UTC day, concurrency none), and a policy that
-	// names another is refused rather than silently given this one.
+	// minute, tokens_per_day one UTC day, budget_eur one calendar month in UTC,
+	// concurrency none), and a policy that names another is refused rather than
+	// silently given this one.
 	Window string `yaml:"window"`
 	// Mode is "hard" (default, refuses) or "soft" (counts and reports only).
 	Mode string `yaml:"mode"`
+}
+
+// maxBudgetEUR bounds a budget so that its value in micro-euros fits an int64.
+const maxBudgetEUR = 1_000_000_000_000
+
+// Whole is an integer that refuses a decimal point: yaml would otherwise read
+// 2.5 as 2, silently changing a limit.
+type Whole int64
+
+// UnmarshalYAML reads an integer and nothing else.
+func (w *Whole) UnmarshalYAML(n *yaml.Node) error {
+	v, err := strconv.ParseInt(n.Value, 10, 64)
+	if err != nil || n.Tag != "!!int" {
+		return fmt.Errorf("line %d: %q is not a whole number", n.Line, n.Value)
+	}
+	*w = Whole(v)
+	return nil
 }
 
 // Quota modes.
@@ -320,16 +341,17 @@ func (d *Document) validate(where string, baseline bool) []error {
 	for i, q := range d.Spec.Quotas {
 		at := fmt.Sprintf("spec.quotas[%d]", i)
 		switch {
-		case q.Dimension == "budget_eur":
-			addf("%s: dimension budget_eur is not supported yet; it arrives with prices (M2 step 2.7)", at)
 		case !q.Dimension.Valid():
-			addf("%s: dimension must be one of rpm, concurrency, tpm, tokens_per_day (got %q)", at, q.Dimension)
+			addf("%s: dimension must be one of rpm, concurrency, tpm, tokens_per_day, budget_eur (got %q)", at, q.Dimension)
 		case seenDim[q.Dimension]:
 			addf("%s: dimension %s is already limited by this policy", at, q.Dimension)
 		}
 		seenDim[q.Dimension] = true
 		if q.Limit < 1 {
 			addf("%s: limit must be at least 1", at)
+		}
+		if q.Dimension == quota.BudgetEUR && q.Limit > maxBudgetEUR {
+			addf("%s: a budget_eur limit is a whole number of euros, at most %d", at, maxBudgetEUR)
 		}
 		if q.Window != "" && q.Window != q.Dimension.Window() {
 			if want := q.Dimension.Window(); want == "" {

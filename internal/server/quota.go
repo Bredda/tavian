@@ -39,7 +39,7 @@ func (s *server) noteQuota(c *call, res quota.Result) {
 func (s *server) refuseQuota(ctx context.Context, w http.ResponseWriter, c *call, res quota.Result) string {
 	p := res.Primary()
 	reason, outcome := audit.RateLimited, "rate_limited"
-	if p.Never || p.Limit.Dimension == quota.TokensPerDay {
+	if p.Never || p.Limit.Dimension == quota.TokensPerDay || p.Limit.Dimension == quota.BudgetEUR {
 		reason, outcome = audit.QuotaExceeded, "quota_exceeded"
 	}
 	msg := quotaMessage(*p)
@@ -75,10 +75,15 @@ func quotaMessage(c quota.Check) string {
 	what := map[quota.Dimension]string{
 		quota.RPM: "requests per minute", quota.Concurrency: "concurrent requests",
 		quota.TPM: "tokens per minute", quota.TokensPerDay: "tokens per day",
+		quota.BudgetEUR: "euros per month",
 	}[l.Dimension]
+	max := l.Max
+	if l.Dimension == quota.BudgetEUR {
+		max /= 1_000_000 // the limit is written in euros
+	}
 	where := strings.ReplaceAll(l.Scope.Kind(), "_", " and ")
 	if c.Never {
-		return fmt.Sprintf("this request is larger than the limit of %d %s of the %s", l.Max, what, where)
+		return fmt.Sprintf("this request is larger than the limit of %d %s of the %s", max, what, where)
 	}
-	return fmt.Sprintf("the limit of %d %s of the %s is reached", l.Max, what, where)
+	return fmt.Sprintf("the limit of %d %s of the %s is reached", max, what, where)
 }

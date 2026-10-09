@@ -216,8 +216,12 @@ func compilePolicy(inferEnv, actionEnv *cel.Env, d Document, where, source strin
 	}
 	scope := quota.Scope{Organization: d.Spec.Scope.Organization, Team: d.Spec.Scope.Team, Application: d.Spec.Scope.Application}
 	for _, q := range d.Spec.Quotas {
+		max := int64(q.Limit)
+		if q.Dimension == quota.BudgetEUR {
+			max *= 1_000_000 // the counters count micro-euros
+		}
 		p.quotas = append(p.quotas, quota.Limit{
-			Policy: p.name, Scope: scope, Dimension: q.Dimension, Max: q.Limit,
+			Policy: p.name, Scope: scope, Dimension: q.Dimension, Max: max,
 			Soft: q.Mode == QuotaSoft, Shadow: p.shadow,
 		})
 	}

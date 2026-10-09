@@ -14,12 +14,28 @@ const (
 	Concurrency  Dimension = "concurrency"    // requests being served
 	TPM          Dimension = "tpm"            // tokens in the last minute
 	TokensPerDay Dimension = "tokens_per_day" //nolint:gosec // a quota name, not a credential: tokens since midnight UTC
+	BudgetEUR    Dimension = "budget_eur"     // money since the 1st of the month, UTC; limits are in micro-euros
 )
+
+// Amount is what a request asks for or used, in the units of the dimensions
+// that count it: tokens for tpm and tokens_per_day, micro-euros for
+// budget_eur.
+type Amount struct{ Tokens, MicroEUR int64 }
+
+// Tokens is an Amount of tokens only.
+func Tokens(n int64) Amount { return Amount{Tokens: n} }
+
+func (a Amount) of(d Dimension) int64 {
+	if d == BudgetEUR {
+		return a.MicroEUR
+	}
+	return a.Tokens
+}
 
 // Valid reports whether d is a dimension this version enforces.
 func (d Dimension) Valid() bool {
 	switch d {
-	case RPM, Concurrency, TPM, TokensPerDay:
+	case RPM, Concurrency, TPM, TokensPerDay, BudgetEUR:
 		return true
 	}
 	return false
@@ -33,6 +49,8 @@ func (d Dimension) Window() string {
 		return "1m"
 	case TokensPerDay:
 		return "1d"
+	case BudgetEUR:
+		return "month"
 	}
 	return ""
 }
@@ -151,6 +169,22 @@ type counter struct {
 	day int64 // days since the epoch, UTC
 	use int64 // used that day
 	run int64 // in flight
+
+	month int64 // calendar month, UTC (see monthOf)
+	spent int64 // micro-euros that month
+}
+
+// monthOf numbers the calendar months, UTC.
+func monthOf(t time.Time) int64 {
+	t = t.UTC()
+	return int64(t.Year())*12 + int64(t.Month()) - 1
+}
+
+func (c *counter) thisMonth(m int64) int64 {
+	if c.month != m {
+		c.month, c.spent = m, 0
+	}
+	return c.spent
 }
 
 func (c *counter) minute(now int64) int64 {
@@ -230,6 +264,12 @@ func untilMidnight(t time.Time) time.Duration {
 	return next.Sub(t)
 }
 
+// untilNextMonth is the time left in the UTC month of t.
+func untilNextMonth(t time.Time) time.Duration {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC).Sub(t)
+}
+
 // check tests one limit against its counter for a request asking for n.
 func (s *Store) check(l Limit, n int64, now time.Time) (Check, bool) {
 	c := s.get(counterKey{l.Scope, l.Dimension})
@@ -241,6 +281,8 @@ func (s *Store) check(l Limit, n int64, now time.Time) (Check, bool) {
 		chk.Used = c.run
 	case TokensPerDay:
 		chk.Used = c.today(now.Unix() / 86400)
+	case BudgetEUR:
+		chk.Used = c.thisMonth(monthOf(now))
 	}
 	if chk.Used+n <= l.Max {
 		return chk, false
@@ -256,6 +298,8 @@ func (s *Store) check(l Limit, n int64, now time.Time) (Check, bool) {
 		chk.Retry = time.Second
 	case TokensPerDay:
 		chk.Retry = untilMidnight(now)
+	case BudgetEUR:
+		chk.Retry = untilNextMonth(now)
 	}
 	return chk, true
 }
@@ -272,6 +316,19 @@ func (s *Store) SeedTokensPerDay(scope Scope, tokens int64) bool {
 	}
 	c := s.get(k)
 	c.day, c.use = s.now().Unix()/86400, max(0, tokens)
+	return true
+}
+
+// SeedBudget is SeedTokensPerDay for the month's spending, in micro-euros.
+func (s *Store) SeedBudget(scope Scope, microEUR int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := counterKey{scope, BudgetEUR}
+	if _, ok := s.counters[k]; ok {
+		return false
+	}
+	c := s.get(k)
+	c.month, c.spent = monthOf(s.now()), max(0, microEUR)
 	return true
 }
 
@@ -352,26 +409,34 @@ type held struct {
 	n   int64
 }
 
-// Reservation is tokens set aside for a request, to be settled with what it
-// really used. A nil Reservation is valid and does nothing.
+// Reservation is tokens and money set aside for a request, to be settled with
+// what it really used. A nil Reservation is valid and does nothing.
 type Reservation struct {
 	s      *Store
-	tokens int64
+	amount Amount
 	held   []held
 	done   bool
 }
 
-// Tokens is the amount reserved.
+// Tokens is the amount of tokens reserved.
 func (r *Reservation) Tokens() int64 {
 	if r == nil {
 		return 0
 	}
-	return r.tokens
+	return r.amount.Tokens
 }
 
-// Reserve applies the token limits (tpm, tokens per day) for a request that
-// may use up to tokens. Like Admit it counts all of them or none.
-func (s *Store) Reserve(limits []Limit, tokens int64) (*Reservation, Result) {
+// MicroEUR is the money reserved.
+func (r *Reservation) MicroEUR() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.amount.MicroEUR
+}
+
+// Reserve applies the limits on tokens and money (tpm, tokens per day, budget)
+// for a request that may use up to a. Like Admit it counts all of them or none.
+func (s *Store) Reserve(limits []Limit, a Amount) (*Reservation, Result) {
 	var mine []Limit
 	for _, l := range limits {
 		if !l.Dimension.atAdmission() {
@@ -381,13 +446,13 @@ func (s *Store) Reserve(limits []Limit, tokens int64) (*Reservation, Result) {
 	if len(mine) == 0 {
 		return nil, Result{}
 	}
-	tokens = max(0, tokens)
+	a = Amount{Tokens: max(0, a.Tokens), MicroEUR: max(0, a.MicroEUR)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	var res Result
 	for _, l := range mine {
-		if chk, over := s.check(l, tokens, now); over {
+		if chk, over := s.check(l, a.of(l.Dimension), now); over {
 			res.Exceeded = append(res.Exceeded, chk)
 			res.Refused = res.Refused || l.enforced()
 		}
@@ -395,7 +460,7 @@ func (s *Store) Reserve(limits []Limit, tokens int64) (*Reservation, Result) {
 	if res.Refused {
 		return nil, res
 	}
-	r := &Reservation{s: s, tokens: tokens}
+	r := &Reservation{s: s, amount: a}
 	done := map[counterKey]bool{}
 	for _, l := range mine {
 		k := counterKey{l.Scope, l.Dimension}
@@ -404,28 +469,34 @@ func (s *Store) Reserve(limits []Limit, tokens int64) (*Reservation, Result) {
 		}
 		done[k] = true
 		c := s.get(k)
-		if l.Dimension == TPM {
-			c.addMinute(now.Unix(), tokens)
-			r.held = append(r.held, held{k, now.Unix(), tokens})
-		} else {
+		n := a.of(l.Dimension)
+		switch l.Dimension {
+		case TPM:
+			c.addMinute(now.Unix(), n)
+			r.held = append(r.held, held{k, now.Unix(), n})
+		case BudgetEUR:
+			m := monthOf(now)
+			c.thisMonth(m)
+			c.spent += n
+			r.held = append(r.held, held{k, m, n})
+		default:
 			day := now.Unix() / 86400
 			c.today(day)
-			c.use += tokens
-			r.held = append(r.held, held{k, day, tokens})
+			c.use += n
+			r.held = append(r.held, held{k, day, n})
 		}
 	}
 	return r, res
 }
 
 // Settle replaces the reservation with what was really used. It may push a
-// counter past its limit: tokens already produced are owed, and the next
+// counter past its limit: what has been produced is owed, and the next
 // requests are refused until the window clears. Only the first call counts, so
 // a retry or a crash path cannot count twice.
-func (r *Reservation) Settle(actual int64) {
+func (r *Reservation) Settle(actual Amount) {
 	if r == nil {
 		return
 	}
-	actual = max(0, actual)
 	r.s.mu.Lock()
 	defer r.s.mu.Unlock()
 	if r.done {
@@ -435,20 +506,29 @@ func (r *Reservation) Settle(actual int64) {
 	now := r.s.now()
 	for _, h := range r.held {
 		c := r.s.get(h.key)
-		if h.key.dim == TPM {
+		used := max(0, actual.of(h.key.dim))
+		switch h.key.dim {
+		case TPM:
 			if h.sec > now.Unix()-buckets && c.sec[h.sec%buckets] == h.sec {
-				c.addMinute(h.sec, actual-h.n)
+				c.addMinute(h.sec, used-h.n)
 			} else { // the reservation left the window: what was used counts now
-				c.addMinute(now.Unix(), actual)
+				c.addMinute(now.Unix(), used)
 			}
-			continue
-		}
-		day := now.Unix() / 86400
-		c.today(day)
-		if h.sec == day {
-			c.use = max(0, c.use+actual-h.n)
-		} else { // the day changed since the reservation: what was used counts now
-			c.use += actual
+		case BudgetEUR:
+			c.thisMonth(monthOf(now))
+			if h.sec == monthOf(now) {
+				c.spent = max(0, c.spent+used-h.n)
+			} else { // the month changed since the reservation: what was used counts now
+				c.spent += used
+			}
+		default:
+			day := now.Unix() / 86400
+			c.today(day)
+			if h.sec == day {
+				c.use = max(0, c.use+used-h.n)
+			} else { // the day changed since the reservation: what was used counts now
+				c.use += used
+			}
 		}
 	}
 }
