@@ -57,6 +57,7 @@ Versions and changelog are generated, never edited by hand.
 ## Standards
 
 - **Tests** with every change; `make test` must pass with `-race`.
+- **Mutation check** for logic that matters (limits, arithmetic, security decisions): `make mutate PKG=./internal/cost` applies each mutant listed in `scripts/mutants/<package path with / as _>.txt` (`internal_cost.txt`), runs the package's tests and reports `killed` or `SURVIVED`; a survivor is a behaviour no test pins down, so add the test. A manifest line is `file<TAB>old<TAB>new`, where `old` occurs exactly once in `file`; see the header of `scripts/mutate.sh`. Commit your changes first: the files of the manifest must be clean, and are restored from git after each mutant.
 - **Never log, trace or label metrics with request or response content**, API keys or backend credentials. Prompts are the most sensitive data this program touches.
 - **Fail closed.** If a security decision cannot be made, refuse the request ([ADR-0005](docs/adr/0005-fail-closed.md)).
 - **All outbound connections go through `internal/egress`** ([ADR-0008](docs/adr/0008-single-egress-point-and-deployment-profiles.md)). Do not use `http.DefaultClient` or dial directly in production code.
