@@ -248,10 +248,10 @@ func TestCustomConfigValidation(t *testing.T) {
 }
 
 // A hostile prompt must not make inspection explode: for inputs built to
-// trigger every scanner over and over, quadrupling the input must cost about
-// four times as much (linear), not sixteen (quadratic). Comparing two sizes
-// instead of timing against a fixed limit keeps the test meaningful under the
-// race detector and coverage instrumentation, which slow these loops a lot.
+// trigger every scanner over and over, growing the input must grow the cost in
+// proportion (linear), not with its square. Comparing two sizes instead of
+// timing against a fixed limit keeps the test meaningful under the race
+// detector and coverage instrumentation, which slow these loops a lot.
 func TestPathologicalInputsScaleLinearly(t *testing.T) {
 	e := NewWith(10*time.Minute, testKey, builtinSet()...)
 	units := map[string]string{
@@ -264,9 +264,19 @@ func TestPathologicalInputsScaleLinearly(t *testing.T) {
 		"prefixes":       "ghp_AKIAeyJ-----BEGIN ",
 		"dots":           "1.2.3.4.",
 	}
+	// The input grows by 8: linear work takes about 8 times as long, quadratic
+	// work 64 times. The threshold sits between the two, and each size is
+	// timed several times keeping the fastest, so that a loaded CPU (race
+	// detector, coverage, a busy runner) cannot push a linear run over it.
+	const (
+		small     = 2000
+		factor    = 8
+		runs      = 5
+		threshold = 24
+	)
 	best := func(in string) time.Duration {
 		fastest := time.Duration(1<<63 - 1)
-		for range 2 {
+		for range runs {
 			start := time.Now()
 			if _, err := e.Inspect(context.Background(), text(in)); err != nil {
 				t.Fatalf("%v", err)
@@ -275,11 +285,10 @@ func TestPathologicalInputsScaleLinearly(t *testing.T) {
 		}
 		return fastest
 	}
-	const small = 4000
 	for name, unit := range units {
-		short, long := best(strings.Repeat(unit, small)), best(strings.Repeat(unit, 4*small))
-		if long > 10*max(short, 2*time.Millisecond) {
-			t.Errorf("%s: %d units took %v, %d units took %v: not linear", name, small, short, 4*small, long)
+		short, long := best(strings.Repeat(unit, small)), best(strings.Repeat(unit, factor*small))
+		if long > threshold*max(short, 2*time.Millisecond) {
+			t.Errorf("%s: %d units took %v, %d units took %v: not linear", name, small, short, factor*small, long)
 		}
 	}
 }
