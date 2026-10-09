@@ -2,6 +2,7 @@ package openai
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -174,6 +175,102 @@ func FuzzExtractChat(f *testing.F) {
 		for _, s := range req.Segments {
 			if s.Text == "" || s.MessageIndex < -1 || s.Part < -1 || fieldNames[s.Field] == "" && s.Field != inspect.FieldOther {
 				t.Fatalf("bad segment %+v", s)
+			}
+		}
+	})
+}
+
+func TestRedactChatReplacesOnlyTheChosenStringsByteForByte(t *testing.T) {
+	body := `{ "model": "m",  "temperature": 0.10, "messages": [
+  {"role":"user","content":"keep me"},
+  {"role":"user","content":[{"type":"text","text":"mail a@b.example <now> & \"quoted\" é"}]}
+], "metadata": {"k": "also a@b.example"}, "n": 1e3 }`
+	req, err := ExtractChat([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	find := func(text string) int {
+		for i, s := range req.Segments {
+			if s.Text == text {
+				return i
+			}
+		}
+		t.Fatalf("no segment %q in %v", text, segs(req))
+		return -1
+	}
+	a := find("mail a@b.example <now> & \"quoted\" é")
+	b := find("also a@b.example")
+	out, err := RedactChat([]byte(body), map[int]string{a: "mail [EMAIL_1] <now> & \"quoted\" é", b: "also [EMAIL_1]"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.NewReplacer(
+		`mail a@b.example <now> & \"quoted\" é`, `mail [EMAIL_1] <now> & \"quoted\" é`,
+		`also a@b.example`, `also [EMAIL_1]`,
+	).Replace(body)
+	if string(out) != want {
+		t.Errorf("output differs from the input only where asked:\n got %s\nwant %s", out, want)
+	}
+	// the result extracts to the replaced texts, in the same places
+	after, err := ExtractChat(out)
+	if err != nil || len(after.Segments) != len(req.Segments) {
+		t.Fatalf("segments %d -> %d, %v", len(req.Segments), len(after.Segments), err)
+	}
+	for i := range req.Segments {
+		if i != a && i != b && after.Segments[i] != req.Segments[i] {
+			t.Errorf("segment %d changed: %+v -> %+v", i, req.Segments[i], after.Segments[i])
+		}
+	}
+	// no replacement: identical bytes
+	same, err := RedactChat([]byte(body), nil)
+	if err != nil || string(same) != body {
+		t.Errorf("no-op redaction changed the body: %v", err)
+	}
+	if _, err := RedactChat([]byte(body), map[int]string{99: "x"}); err == nil {
+		t.Error("an unknown segment must be an error")
+	}
+	if _, err := RedactChat([]byte(`{"messages":[{"role":"user","content":[{"type":"image_url"}]}]}`), map[int]string{0: "x"}); err == nil {
+		t.Error("a request with parts that cannot be inspected must not be rewritten")
+	}
+}
+
+func FuzzRedactChat(f *testing.F) {
+	for _, s := range []string{
+		`{"model":"m","messages":[{"role":"user","content":"hi a@b.c"}]}`,
+		`{"a":["x","y",{"b":"c"}],"d":" \" \\ "}`,
+		`  {"x" : "y"}  `,
+	} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, body []byte) {
+		req, err := ExtractChat(body)
+		if err != nil || len(req.Gaps) > 0 {
+			return
+		}
+		repl := map[int]string{}
+		for i := range req.Segments {
+			if i%2 == 0 {
+				repl[i] = fmt.Sprintf("[R_%d]", i)
+			}
+		}
+		out, err := RedactChat(body, repl)
+		if err != nil {
+			t.Fatalf("redacting a request that extracts fine: %v", err)
+		}
+		after, err := ExtractChat(out)
+		if err != nil {
+			t.Fatalf("redacted body is not valid: %v\n%s", err, out)
+		}
+		if len(after.Segments) != len(req.Segments) {
+			t.Fatalf("segments %d -> %d", len(req.Segments), len(after.Segments))
+		}
+		for i, s := range after.Segments {
+			want := req.Segments[i].Text
+			if r, ok := repl[i]; ok {
+				want = r
+			}
+			if s.Text != want {
+				t.Fatalf("segment %d = %q, want %q", i, s.Text, want)
 			}
 		}
 	})

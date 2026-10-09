@@ -15,3 +15,18 @@ spec:
       - id: codenames-are-confidential
         when: finding.type == "custom" && finding.subtype == "codenames"
         label: confidential
+
+  inspection:
+    request:
+      on_finding:
+        # Credentials in a prompt are refused outright, whatever the caller is
+        # cleared for. The caller sees this reason code, never the value.
+        - id: no-secrets-in-prompts
+          when: finding.type == "secret"
+          action: block
+          reason: SECRET_IN_PROMPT
+        # E-mail addresses are replaced by [EMAIL_1], [EMAIL_2]... before the
+        # request is sent to any model; the same address gets the same number.
+        - id: mask-emails
+          when: finding.subtype == "email"
+          action: redact

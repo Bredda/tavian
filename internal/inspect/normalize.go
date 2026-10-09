@@ -11,7 +11,11 @@ import (
 // controls), exotic spaces and full-width ASCII look-alikes. Offsets in
 // findings refer to the normalized text. Plain ASCII, the common case, is
 // returned as is.
-func normalize(s string) string {
+func normalize(s string) string { return Normalize(s) }
+
+// Normalize is the normalization applied to every segment before detectors
+// run. Offsets in findings refer to its output.
+func Normalize(s string) string {
 	ascii := true
 	for i := 0; i < len(s); i++ {
 		if s[i] >= utf8.RuneSelf {

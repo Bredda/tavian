@@ -306,31 +306,42 @@ spec:
 func TestInvalidPolicies(t *testing.T) {
 	head := "apiVersion: tavian/v1alpha1\nkind: Policy\n"
 	for name, c := range map[string]struct{ doc, want string }{
-		"typo in a field":     {head + "metadata: { name: x }\nspec:\n  scope: { organization: true }\n  modles: {}\n", "modles"},
-		"wrong api version":   {"apiVersion: v2\nkind: Policy\nmetadata: { name: x }\nspec: { scope: { organization: true } }", "apiVersion"},
-		"wrong kind":          {"apiVersion: tavian/v1alpha1\nkind: Rule\nmetadata: { name: x }\nspec: { scope: { organization: true } }", "kind must be"},
-		"missing name":        {head + "spec: { scope: { organization: true } }", "metadata.name"},
-		"reserved name":       {head + "metadata: { name: baseline }\nspec: { scope: { organization: true } }", "reserved"},
-		"no scope":            {head + "metadata: { name: x }\nspec: {}", "scope is required"},
-		"org with team":       {head + "metadata: { name: x }\nspec: { scope: { organization: true, team: a } }", "cannot be combined"},
-		"user scope":          {head + "metadata: { name: x }\nspec: { scope: { user: bob } }", "scope.user is not supported yet"},
-		"shadow mode":         {head + "metadata: { name: x, mode: shadow }\nspec: { scope: { organization: true } }", "shadow is not supported yet"},
-		"unknown mode":        {head + "metadata: { name: x, mode: loud }\nspec: { scope: { organization: true } }", "mode must be"},
-		"quotas":              {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [] }", "spec.quotas is not supported yet"},
-		"audit":               {head + "metadata: { name: x }\nspec: { scope: { organization: true }, audit: { content: hash } }", "spec.audit is not supported yet"},
-		"inspection":          {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { on_error: block } }", "spec.inspection is not supported yet"},
-		"unknown label":       {head + "metadata: { name: x }\nspec: { scope: { organization: true }, destinations: { secret: [internal] } }", "unknown label"},
-		"unknown class":       {head + "metadata: { name: x }\nspec: { scope: { organization: true }, destinations: { internal: [moon] } }", "unknown destination class"},
-		"unknown default":     {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { default: tiny } }", "unknown label"},
-		"rule without label":  {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { when: 'true' } ] } }", "label must be one of"},
-		"rule without when":   {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { label: restricted } ] } }", "when is required"},
-		"syntax error":        {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'finding.type ==', label: restricted } ] } }", "Syntax error"},
-		"misspelled field":    {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'finding.subtyp == \"iban\"', label: restricted } ] } }", "check the field names"},
-		"not a boolean":       {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'finding.count + 1', label: restricted } ] } }", "true or false"},
-		"unknown variable":    {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'label == \"x\"', label: restricted } ] } }", "undeclared reference"},
-		"duplicate rule id":   {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'true', label: restricted }, { id: r, when: 'true', label: restricted } ] } }", "duplicate id"},
-		"expression too long": {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: '" + strings.Repeat("true && ", 200) + "true', label: restricted } ] } }", "longer than"},
-		"empty file":          {"", "no policy found"},
+		"typo in a field":       {head + "metadata: { name: x }\nspec:\n  scope: { organization: true }\n  modles: {}\n", "modles"},
+		"wrong api version":     {"apiVersion: v2\nkind: Policy\nmetadata: { name: x }\nspec: { scope: { organization: true } }", "apiVersion"},
+		"wrong kind":            {"apiVersion: tavian/v1alpha1\nkind: Rule\nmetadata: { name: x }\nspec: { scope: { organization: true } }", "kind must be"},
+		"missing name":          {head + "spec: { scope: { organization: true } }", "metadata.name"},
+		"reserved name":         {head + "metadata: { name: baseline }\nspec: { scope: { organization: true } }", "reserved"},
+		"no scope":              {head + "metadata: { name: x }\nspec: {}", "scope is required"},
+		"org with team":         {head + "metadata: { name: x }\nspec: { scope: { organization: true, team: a } }", "cannot be combined"},
+		"user scope":            {head + "metadata: { name: x }\nspec: { scope: { user: bob } }", "scope.user is not supported yet"},
+		"shadow mode":           {head + "metadata: { name: x, mode: shadow }\nspec: { scope: { organization: true } }", "shadow is not supported yet"},
+		"unknown mode":          {head + "metadata: { name: x, mode: loud }\nspec: { scope: { organization: true } }", "mode must be"},
+		"quotas":                {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [] }", "spec.quotas is not supported yet"},
+		"audit":                 {head + "metadata: { name: x }\nspec: { scope: { organization: true }, audit: { content: hash } }", "spec.audit is not supported yet"},
+		"response inspection":   {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { response: { mode: observe } } }", "spec.inspection.response is not supported yet"},
+		"rulesets":              {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { rulesets: [a] } } }", "rulesets is not supported yet"},
+		"on_error allow":        {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { on_error: allow } }", "always refused"},
+		"on_error junk":         {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { on_error: shrug } }", "on_error must be block"},
+		"unknown action":        {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { on_finding: [ { when: 'true', action: delete } ] } } }", "action must be one of"},
+		"action without when":   {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { on_finding: [ { action: block } ] } } }", "when is required"},
+		"reason on a redact":    {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { on_finding: [ { when: 'true', action: redact, reason: NOPE } ] } } }", "reason is for block rules"},
+		"lower-case reason":     {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { on_finding: [ { when: 'true', action: block, reason: nope } ] } } }", "reason is for block rules"},
+		"classes on a block":    {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { on_finding: [ { when: 'true', action: block, classes: [internal] } ] } } }", "classes is only for restrict_destinations"},
+		"unknown class in rule": {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { on_finding: [ { when: 'true', action: restrict_destinations, classes: [moon] } ] } } }", "unknown destination class"},
+		"action rule typo":      {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { on_finding: [ { id: r, when: 'finding.subtyp == \"x\"', action: flag } ] } } }", "check the field names"},
+		"id shared with infer":  {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'true', label: restricted } ] }, inspection: { request: { on_finding: [ { id: r, when: 'true', action: flag } ] } } }", "duplicate id"},
+		"unknown label":         {head + "metadata: { name: x }\nspec: { scope: { organization: true }, destinations: { secret: [internal] } }", "unknown label"},
+		"unknown class":         {head + "metadata: { name: x }\nspec: { scope: { organization: true }, destinations: { internal: [moon] } }", "unknown destination class"},
+		"unknown default":       {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { default: tiny } }", "unknown label"},
+		"rule without label":    {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { when: 'true' } ] } }", "label must be one of"},
+		"rule without when":     {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { label: restricted } ] } }", "when is required"},
+		"syntax error":          {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'finding.type ==', label: restricted } ] } }", "Syntax error"},
+		"misspelled field":      {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'finding.subtyp == \"iban\"', label: restricted } ] } }", "check the field names"},
+		"not a boolean":         {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'finding.count + 1', label: restricted } ] } }", "true or false"},
+		"unknown variable":      {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'label == \"x\"', label: restricted } ] } }", "undeclared reference"},
+		"duplicate rule id":     {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: 'true', label: restricted }, { id: r, when: 'true', label: restricted } ] } }", "duplicate id"},
+		"expression too long":   {head + "metadata: { name: x }\nspec: { scope: { organization: true }, classification: { infer: [ { id: r, when: '" + strings.Repeat("true && ", 200) + "true', label: restricted } ] } }", "longer than"},
+		"empty file":            {"", "no policy found"},
 	} {
 		_, err := compileErr(c.doc)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
@@ -393,19 +404,17 @@ spec:
 func TestAssertRecomputesTheConstraints(t *testing.T) {
 	e := compile(t)
 	id := Identity{Team: "t"}
-	if err := e.Assert(id, taxonomy.Confidential, "local", taxonomy.ClassInternal, taxonomy.Restricted); err != nil {
+	conf := Decision{Label: taxonomy.Confidential}
+	if err := e.Assert(id, conf, Backend{ID: "local", Class: taxonomy.ClassInternal, Max: taxonomy.Restricted}); err != nil {
 		t.Errorf("internal backend for confidential data: %v", err)
 	}
-	for _, b := range []struct {
-		class taxonomy.Class
-		max   taxonomy.Label
-	}{
-		{taxonomy.ClassApprovedExternal, taxonomy.Restricted},
-		{taxonomy.ClassInternal, taxonomy.Internal},
-		{taxonomy.ClassPublicExternal, taxonomy.Public},
+	for _, b := range []Backend{
+		{ID: "a", Class: taxonomy.ClassApprovedExternal, Max: taxonomy.Restricted},
+		{ID: "b", Class: taxonomy.ClassInternal, Max: taxonomy.Internal},
+		{ID: "c", Class: taxonomy.ClassPublicExternal, Max: taxonomy.Public},
 	} {
-		if err := e.Assert(id, taxonomy.Confidential, "bad", b.class, b.max); err == nil {
-			t.Errorf("a %s backend (max %s) passed the assertion for confidential data", b.class, b.max)
+		if err := e.Assert(id, conf, b); err == nil {
+			t.Errorf("a %s backend (max %s) passed the assertion for confidential data", b.Class, b.Max)
 		}
 	}
 	// a team policy that narrows is honoured by the assertion too
@@ -418,11 +427,23 @@ spec:
   destinations:
     internal: [internal]
 `)
-	if err := narrow.Assert(id, taxonomy.Internal, "partner", taxonomy.ClassApprovedExternal, taxonomy.Internal); err == nil {
+	partner := Backend{ID: "partner", Class: taxonomy.ClassApprovedExternal, Max: taxonomy.Internal}
+	internal := Decision{Label: taxonomy.Internal}
+	if err := narrow.Assert(id, internal, partner); err == nil {
 		t.Error("the team policy forbids external destinations for internal data")
 	}
-	if err := narrow.Assert(Identity{Team: "other"}, taxonomy.Internal, "partner", taxonomy.ClassApprovedExternal, taxonomy.Internal); err != nil {
+	if err := narrow.Assert(Identity{Team: "other"}, internal, partner); err != nil {
 		t.Errorf("another team is not affected: %v", err)
+	}
+	// and so is a restrict_destinations action, carried by the decision
+	restricted := Decision{Label: taxonomy.Internal, Restricted: []taxonomy.Class{taxonomy.ClassInternal}}
+	if err := e.Assert(id, restricted, partner); err == nil {
+		t.Error("a restrict_destinations action must hold in phase B")
+	}
+	// "nothing is allowed" is a restriction too, not the absence of one
+	none := Decision{Label: taxonomy.Internal, Restricted: []taxonomy.Class{}}
+	if err := e.Assert(id, none, Backend{ID: "local", Class: taxonomy.ClassInternal, Max: taxonomy.Restricted}); err == nil {
+		t.Error("a restriction that leaves no class must refuse every backend")
 	}
 }
 
@@ -508,5 +529,157 @@ func TestExamplePoliciesCompile(t *testing.T) {
 	}
 	if v := e.AuthorizeModel(fin, "gpt-4"); v.Allowed {
 		t.Error("finance may only use llama-* and mistral-*")
+	}
+	// the actions of the examples
+	if d := decide(t, e, Identity{Team: "research"}, "", kind("secret", "jwt")); d.Block == nil || d.Block.Reason != "SECRET_IN_PROMPT" {
+		t.Errorf("secrets must be blocked for everyone: %+v", d.Block)
+	}
+	if d := decide(t, e, fin, "", kind("pii", "email")); len(d.Redact) != 1 {
+		t.Errorf("e-mails must be redacted: %+v", d.Redact)
+	}
+	if d := decide(t, e, fin, "", kind("pii", "phone")); len(d.Flagged) != 1 {
+		t.Errorf("phones must be flagged for finance: %+v", d.Flagged)
+	}
+}
+
+const actionsPolicy = `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: acts }
+spec:
+  scope: { organization: true }
+  inspection:
+    request:
+      on_finding:
+        - { id: no-secrets, when: 'finding.type == "secret"', action: block, reason: SECRET_IN_PROMPT }
+        - { id: mask-emails, when: 'finding.subtype == "email"', action: redact }
+        - { id: ids-stay-home, when: 'finding.subtype == "iban" && label.atLeast("confidential")', action: restrict_destinations }
+        - { id: watch-phones, when: 'finding.subtype == "phone"', action: flag }
+        - { id: nothing, when: 'finding.subtype == "ipv4"', action: allow }
+`
+
+func TestActionsOnFindings(t *testing.T) {
+	e := compile(t, actionsPolicy)
+	email, iban, phone := kind("pii", "email"), kind("pii", "iban"), kind("pii", "phone")
+	secret, ip := kind("secret", "jwt"), kind("pii", "ipv4")
+
+	d := decide(t, e, Identity{}, "", email, phone)
+	if d.Block != nil || len(d.Redact) != 1 || d.Redact[0] != (RedactKind{Type: "pii", Subtype: "email"}) ||
+		len(d.Flagged) != 1 || d.Flagged[0] != "acts/watch-phones" || d.Restricted != nil {
+		t.Errorf("email and phone: %+v", d)
+	}
+	if strings.Join(d.Matched, ",") != "acts/mask-emails,acts/watch-phones" {
+		t.Errorf("matched = %v", d.Matched)
+	}
+
+	d = decide(t, e, Identity{}, "", secret, email)
+	if d.Block == nil || d.Block.Rule != "acts/no-secrets" || d.Block.Reason != "SECRET_IN_PROMPT" {
+		t.Errorf("a secret must be blocked: %+v", d.Block)
+	}
+
+	// the iban rule reads the label: confidential, so destinations are narrowed
+	// to internal (which the baseline already does for confidential data...)
+	d = decide(t, e, Identity{}, "", iban)
+	if d.Restricted == nil || len(d.Restricted) != 1 || d.Restricted[0] != taxonomy.ClassInternal || len(d.Constraints.Classes) != 1 {
+		t.Errorf("iban: %+v", d)
+	}
+	// allow matches but changes nothing
+	d = decide(t, e, Identity{}, "", ip)
+	if len(d.Matched) != 1 || d.Block != nil || d.Redact != nil || d.Flagged != nil || d.Restricted != nil {
+		t.Errorf("allow: %+v", d)
+	}
+	// nothing found, nothing happens
+	if d := decide(t, e, Identity{}, ""); len(d.Matched) != 0 || d.Block != nil {
+		t.Errorf("no findings: %+v", d)
+	}
+}
+
+func TestRestrictDestinationsNarrowsInternalDataToo(t *testing.T) {
+	e := compile(t, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: r }
+spec:
+  scope: { organization: true }
+  inspection:
+    request:
+      on_finding:
+        - { id: emails-home, when: 'finding.subtype == "email"', action: restrict_destinations }
+        - { id: emails-partner, when: 'finding.subtype == "email"', action: restrict_destinations, classes: [approved-external, internal] }
+        - { id: phones-partner, when: 'finding.subtype == "phone"', action: restrict_destinations, classes: [approved-external] }
+`)
+	d := decide(t, e, Identity{}, "", kind("pii", "email"))
+	// internal data may go to internal and approved-external; the two rules
+	// leave internal only
+	if len(d.Constraints.Classes) != 1 || d.Constraints.Classes[0] != taxonomy.ClassInternal || len(d.Restricted) != 1 {
+		t.Errorf("email: %+v", d.Constraints.Classes)
+	}
+	// restrict rules intersect: internal (emails) with approved-external (phones) leaves nothing
+	d = decide(t, e, Identity{}, "", kind("pii", "email"), kind("pii", "phone"))
+	if len(d.Constraints.Classes) != 0 || d.Restricted == nil || len(d.Restricted) != 0 {
+		t.Errorf("email and phone: classes %v restricted %v", d.Constraints.Classes, d.Restricted)
+	}
+	if c := d.Constraints.Excludes(taxonomy.ClassInternal, taxonomy.Restricted); c == "" {
+		t.Error("nothing may receive this request")
+	}
+}
+
+func TestBlockWithoutAReasonUsesTheDefault(t *testing.T) {
+	e := compile(t, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: b }
+spec:
+  scope: { team: finance }
+  inspection: { request: { on_finding: [ { when: 'finding.subtype == "email"', action: block } ] } }
+`)
+	d := decide(t, e, Identity{Team: "finance"}, "", kind("pii", "email"))
+	if d.Block == nil || d.Block.Reason != DefaultBlockReason || d.Block.Rule != "b/action-0" {
+		t.Errorf("block = %+v", d.Block)
+	}
+	if d := decide(t, e, Identity{Team: "research"}, "", kind("pii", "email")); d.Block != nil {
+		t.Error("the rule is scoped to finance")
+	}
+}
+
+func TestInferRulesCannotReadTheLabelButActionsCan(t *testing.T) {
+	if _, err := compileErr(`
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: x }
+spec:
+  scope: { organization: true }
+  classification: { infer: [ { id: r, when: 'label == "x"', label: restricted } ] }
+`); err == nil || !strings.Contains(err.Error(), "undeclared reference") {
+		t.Errorf("infer rules compute the label, they cannot read it: %v", err)
+	}
+	e := compile(t, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: x }
+spec:
+  scope: { organization: true }
+  inspection: { request: { on_finding: [ { id: r, when: 'label == "restricted"', action: flag } ] } }
+`)
+	if d := decide(t, e, Identity{}, "", kind("secret", "jwt")); len(d.Flagged) != 1 {
+		t.Errorf("the action should see the effective label: %+v", d)
+	}
+	if d := decide(t, e, Identity{}, "", kind("pii", "email")); len(d.Flagged) != 0 {
+		t.Errorf("label is internal: %+v", d)
+	}
+}
+
+func TestActionRuntimeErrorsFailClosed(t *testing.T) {
+	e := compile(t, `
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata: { name: x }
+spec:
+  scope: { organization: true }
+  inspection: { request: { on_finding: [ { id: div, when: 'finding.count == 0 || 10 / (finding.count - 1) == 1', action: flag } ] } }
+`)
+	_, err := e.Decide(Input{Kinds: []inspect.Kind{{Type: "t", Subtype: "s", Count: 1}}})
+	if err == nil || !strings.Contains(err.Error(), "x/div") {
+		t.Errorf("err = %v", err)
 	}
 }

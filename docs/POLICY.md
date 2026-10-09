@@ -16,8 +16,24 @@ The **built-in baseline** is itself a policy in this format (`internal/policy/ba
 | `spec.destinations` | implemented: label -> destination classes; the allowed set is the intersection over the applicable policies. A class the baseline does not allow has no effect (`tavian validate` warns) |
 | `spec.classification.default` | implemented: the highest default among applicable policies |
 | `spec.classification.infer` | implemented: CEL rules over `finding.*`, `identity.*`, `request.*`; the label is the highest of the rules that match |
-| `spec.inspection` (`on_finding` actions, `redact`, `block`), `metadata.mode: shadow` | not yet: refused at load with a message |
+| `spec.inspection.request.on_finding` | implemented: rules `{id, when, action, reason?, classes?}` evaluated once per kind of finding, with `label` available (see below) |
+| `spec.inspection.on_error` | `block` only (the default): a request that cannot be inspected is always refused |
+| `spec.inspection.response`, `spec.inspection.request.rulesets`, `metadata.mode: shadow` | not yet: refused at load with a message (response: M4; detectors are configured under `inspection:` in `tavian.yaml`; shadow: next change) |
 | `spec.quotas`, `spec.audit` | not yet: refused at load (quotas: M2 step 2.5; audit settings: 2.6 and M4) |
+
+### Actions on findings
+
+A rule in `spec.inspection.request.on_finding` fires when its `when` is true for a kind of finding in the request (`finding.*` describes that kind; `label` is the effective label of the request). Its `action` is one of the following. When several rules fire the most restrictive wins, in this order:
+
+| Action | Effect |
+|---|---|
+| `block` | Refuse the request: 403 `blocked_by_policy`, recorded under the rule's `reason` (an UPPER_SNAKE code such as `SECRET_IN_PROMPT`; default `POLICY_BLOCKED`). The caller sees the reason code and a `decision_id`, never the value. A block is decided before the clearance check |
+| `restrict_destinations` | Keep the request off every destination class except those in `classes` (default: `internal` only), on top of the table for its label. Several rules intersect. The label is unchanged |
+| `redact` | Replace every finding of that kind by a typed placeholder (`[IBAN_1]`, `[EMAIL_2]`; the same value gets the same number) before the request leaves the gateway. The text sent is the *normalized* text, with the replacements |
+| `flag` | Record the rule in the decision record, nothing else |
+| `allow` | Explicitly do nothing for this kind (it still appears in the record) |
+
+`redact` is a protection on top of the label, not a way around it: **the label is computed from the findings of the original request**, so a request with a redacted IBAN is still `confidential` and still goes only to internal backends. After redacting, the gateway inspects what it is about to send and **refuses the request (`redaction_failed`, 500) if any redacted value is still there**, which also catches a value that only became detectable once its neighbour was replaced. If the request has more findings than the engine keeps (1000), it cannot be sure to have replaced them all and is refused (`redaction_incomplete`, 400). The decision record counts the redactions per kind, never the values. Redaction applies to every string of the request, like inspection.
 
 Anything not implemented is **refused when the policy is loaded**, never ignored, because a policy that silently does less than it says is worse than none. `tavian validate -config tavian.yaml` loads and checks the policies and prints warnings.
 
@@ -50,7 +66,7 @@ Organization  →  Team  →  Application  →  User
 
 Before phase A, **model authorization** looks only at the identity and the model, so a refused model costs no inspection time.
 
-Phase B is defence in depth: routing already filters on constraints, and this check ensures a bug there cannot leak data.
+Phase B is defence in depth: routing already filters on constraints, and this check ensures a bug there cannot leak data. It recomputes the constraints from the policies and the decision (including `restrict_destinations`), not from what routing was given.
 
 *In main after v0.1.0:* both phases run with a built-in default (the `destinations` table and the finding-to-label inference, see [SECURITY.md](SECURITY.md#data-classification)); the YAML + CEL engine will load the same shapes from policy files.
 
@@ -149,7 +165,7 @@ Available variables in `when:`:
 | `identity.*` | `user`, `groups`, `team`, `application`, `roles`, `auth_method` |
 | `request.*` | `model`, `type`, `stream`, `max_tokens`, `has_tools`, `has_multimodal` |
 | `finding.*` | `type`, `subtype`, `severity`, `confidence`, `count` (evaluated once per kind of finding: `confidence` and `severity` are the highest seen, `count` how many) |
-| `label` | The effective classification label, with `label.atLeast("confidential")` for ordered comparison (CEL compares strings alphabetically). *Not available in `infer` rules, which compute it; it arrives with `on_finding` actions.* |
+| `label` | The effective classification label, with `label.atLeast("confidential")` for ordered comparison (CEL compares strings alphabetically). Available in `on_finding` rules; not in `infer` rules, which compute it |
 | `route.*` | `backend`, `destination_class`, `region` (phase B only) |
 | `time.*` | Time of day / weekday, for time-bound rules |
 

@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -141,6 +142,7 @@ type call struct {
 	inspection *inspect.Result
 	decision   *policy.Decision
 	matched    []string // policy rules and policies that acted
+	redactions map[string]int
 	candidates []router.Candidate
 }
 
@@ -168,6 +170,7 @@ func (c *call) record(ctx context.Context, outcome string, reason audit.Reason, 
 		rec.Candidates = append(rec.Candidates, audit.Candidate{Backend: cand.Backend, Excluded: cand.Excluded})
 	}
 	rec.RulesMatched = c.matched
+	rec.Redactions = c.redactions
 	if c.decision != nil {
 		rec.Label = string(c.decision.Label)
 		rec.LabelSources = &audit.LabelSources{
@@ -299,11 +302,29 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	c.decision = &decision
 	c.matched = append(c.matched, decision.Matched...)
 	s.Metrics.observeLabel(decision.Label)
+	s.Metrics.observeActions(decision)
+	if decision.Block != nil {
+		reason := audit.PolicyBlocked
+		reason.Code = decision.Block.Reason // the rule's own code, for the record
+		return s.refuse(ctx, w, c, reason, "the request was blocked by policy ("+decision.Block.Reason+")", "policy_blocked")
+	}
 	if decision.Label.Rank() > id.MaxClassification.Rank() {
 		return s.refuse(ctx, w, c, audit.ClearanceExceeded,
 			"this request is classified "+string(decision.Label)+", above the "+string(id.MaxClassification)+" your credentials are cleared to send", "clearance_exceeded")
 	}
 	constraints := decision.Constraints
+
+	// redact: replace what the policy says must not be sent, then check that
+	// the result no longer holds it. The label stays that of the original
+	// request, so redaction never opens a more external route.
+	body := raw
+	if len(decision.Redact) > 0 {
+		redacted, reason, msg := s.redact(ctx, snap, raw, creq, inspection, decision, c)
+		if msg != "" {
+			return s.refuse(ctx, w, c, reason, msg, "redaction_failed")
+		}
+		body = redacted
+	}
 
 	// route, among the backends of the model that the constraints allow
 	resolve := s.Route
@@ -321,14 +342,14 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 	case err != nil:
 		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_error")
 	}
-	upstreamBody, err := openai.RewriteChat(raw, route.UpstreamModel)
+	upstreamBody, err := openai.RewriteChat(body, route.UpstreamModel)
 	if err != nil {
 		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
 
 	// policy phase B: defence in depth, the chosen backend must satisfy the
 	// constraints whatever routing did.
-	if err := snap.Policy.Assert(pid, decision.Label, route.Backend.ID, route.Backend.DestinationClass, route.Backend.MaxClassification); err != nil {
+	if err := snap.Policy.Assert(pid, decision, policy.Backend{ID: route.Backend.ID, Class: route.Backend.DestinationClass, Max: route.Backend.MaxClassification}); err != nil {
 		s.Log.ErrorContext(ctx, "routing violated the policy constraints", "error", err)
 		return s.refuse(ctx, w, c, audit.RoutingAssertion, "internal error", "routing_assertion_failed")
 	}
@@ -561,4 +582,49 @@ func policyIdentity(id *auth.Identity) policy.Identity {
 	return policy.Identity{
 		User: id.Subject, Groups: id.Groups, Team: id.Team, Application: id.Application, AuthMethod: id.Method,
 	}
+}
+
+// redact applies the redact rules of d to the request. It returns the new body,
+// or a reason and a message when the request cannot be served: too many
+// findings to be sure all were replaced, or a redacted value still present in
+// the result.
+func (s *server) redact(ctx context.Context, snap *config.Snapshot, raw []byte, req inspect.Request, res inspect.Result, d policy.Decision, c *call) ([]byte, audit.Reason, string) {
+	if res.Truncated {
+		return nil, audit.RedactionIncomplete, "the request holds too many sensitive values to redact them all"
+	}
+	pick := func(f inspect.Finding) bool {
+		return slices.Contains(d.Redact, policy.RedactKind{Type: f.Type, Subtype: f.Subtype})
+	}
+	r := inspect.Redact(req, res.Findings, pick)
+	out, err := openai.RedactChat(raw, r.Replacements)
+	if err != nil {
+		s.Log.ErrorContext(ctx, "redaction failed", "error", err)
+		return nil, audit.RedactionFailed, "the request could not be redacted"
+	}
+	// What was redacted must be gone: inspect the result and look for the same
+	// values. This also catches a value that only became detectable once its
+	// neighbour was replaced.
+	again, err := openai.ExtractChat(out)
+	var res2 inspect.Result
+	if err == nil {
+		res2, err = snap.Inspector.Inspect(ctx, again)
+	}
+	if err != nil || res2.Truncated {
+		s.Log.ErrorContext(ctx, "redacted request could not be verified")
+		return nil, audit.RedactionFailed, "the request could not be redacted"
+	}
+	gone := map[string]bool{}
+	for _, f := range res.Findings {
+		if pick(f) {
+			gone[f.Fingerprint] = true
+		}
+	}
+	for _, f := range res2.Findings {
+		if gone[f.Fingerprint] {
+			s.Log.ErrorContext(ctx, "a redacted value is still present after redaction", "kind", string(f.Type)+"."+f.Subtype)
+			return nil, audit.RedactionFailed, "the request could not be redacted"
+		}
+	}
+	c.redactions = r.Counts
+	return out, audit.Reason{}, ""
 }

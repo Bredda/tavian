@@ -25,3 +25,15 @@ spec:
       - id: customer-list
         when: finding.subtype == "email" && finding.count >= 20
         label: restricted
+
+  inspection:
+    request:
+      on_finding:
+        # Telephone numbers are fine for finance, but worth a trace in the audit.
+        - id: watch-phones
+          when: finding.subtype == "phone"
+          action: flag
+        # Whatever the label says, a mention of a card number stays internal.
+        - id: cards-stay-home
+          when: finding.subtype == "payment_card"
+          action: restrict_destinations

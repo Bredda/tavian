@@ -77,6 +77,8 @@ type DecisionRecord struct {
 	Constraints []string `json:"constraints,omitempty"`
 	// RulesMatched are the policy rules that fired, as "policy/rule".
 	RulesMatched []string `json:"rules_matched,omitempty"`
+	// Redactions counts the spans replaced by placeholders, per "type.subtype".
+	Redactions map[string]int `json:"redactions,omitempty"`
 
 	Outcome    string `json:"outcome"`
 	ReasonCode string `json:"reason_code"`

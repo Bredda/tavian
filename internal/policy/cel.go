@@ -17,12 +17,19 @@ const costLimit = 10_000
 // newEnv declares what an expression can see: identity, request and finding as
 // maps, and the function label.atLeast("confidential"), because CEL compares
 // strings alphabetically and labels have their own order.
-func newEnv() (*cel.Env, error) {
+func newEnv(withLabel bool) (*cel.Env, error) {
 	m := cel.MapType(cel.StringType, cel.DynType)
-	return cel.NewEnv(
+	opts := []cel.EnvOption{
 		cel.Variable("identity", m),
 		cel.Variable("request", m),
 		cel.Variable("finding", m),
+	}
+	if withLabel {
+		// the label is what the rules of `infer` compute, so only the rules
+		// that come after it can read it
+		opts = append(opts, cel.Variable("label", cel.StringType))
+	}
+	opts = append(opts,
 		cel.Function("atLeast",
 			cel.MemberOverload("string_at_least_string", []*cel.Type{cel.StringType, cel.StringType}, cel.BoolType,
 				cel.BinaryBinding(func(l, r ref.Val) ref.Val {
@@ -34,6 +41,7 @@ func newEnv() (*cel.Env, error) {
 					return types.Bool(taxonomy.Label(a).Rank() >= taxonomy.Label(b).Rank())
 				}))),
 	)
+	return cel.NewEnv(opts...)
 }
 
 // condition is a compiled `when` expression.
@@ -78,7 +86,7 @@ func (c *condition) eval(act map[string]any) (bool, error) {
 
 // sampleActivation has every field with a zero value.
 func sampleActivation() map[string]any {
-	return activation(Identity{}, Request{}, Kindish{Severity: "low"})
+	return activation(Identity{}, Request{}, Kindish{Severity: "low"}, string(taxonomy.Internal))
 }
 
 // Kindish is what `finding.*` shows an expression: one kind of finding.
@@ -90,8 +98,9 @@ type Kindish struct {
 	Count      int64
 }
 
-func activation(id Identity, req Request, f Kindish) map[string]any {
+func activation(id Identity, req Request, f Kindish, label string) map[string]any {
 	return map[string]any{
+		"label": label,
 		"identity": map[string]any{
 			"user": id.User, "groups": nonNil(id.Groups), "roles": nonNil(id.Roles),
 			"team": id.Team, "application": id.Application, "auth_method": id.AuthMethod,
