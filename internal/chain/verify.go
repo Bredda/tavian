@@ -245,8 +245,8 @@ WHERE c.position > $1 ORDER BY c.position LIMIT $2`, after, pageSize)
 				rep.problem(pos, id, "seal %d says this entry's hash is different: the chain was rewritten", s.ID)
 			}
 
-			switch {
-			case payload == nil:
+			switch payload {
+			case nil:
 				if opt.AllowPruned && pos <= lastSealed {
 					rep.Pruned++
 				} else {
