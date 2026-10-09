@@ -1,0 +1,46 @@
+meta {
+  name: 07 A shadow policy enforces nothing
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{demoKey}}
+}
+
+body:json {
+  {
+    "model": "demo-chat",
+    "max_tokens": 20,
+    "messages": [
+      { "role": "user", "content": "Server 10.12.13.14 is down" }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.x_mock_backend: eq on-prem
+}
+
+script:post-response {
+  bru.setVar("shadowDecisionId", res.getHeader("x-tavian-decision-id"));
+}
+
+docs {
+  The policy `trial-no-ip-addresses` is in shadow mode: the request is
+  answered, and the decision record says what the policy would have done
+  (`DECISION_ID`: the `X-Tavian-Decision-Id` of the answer, kept in
+  `shadowDecisionId`):
+
+  ```
+  docker compose -f deploy/compose/docker-compose.yml exec postgres psql -U tavian -d tavian -c \
+    "select payload->'shadow' from outbox where event_id='$DECISION_ID'"
+  ```
+}

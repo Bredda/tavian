@@ -1,0 +1,35 @@
+meta {
+  name: 04 A caller without the clearance is refused
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{demoKey}}
+}
+
+body:json {
+  {
+    "model": "demo-shared",
+    "max_tokens": 20,
+    "messages": [
+      { "role": "user", "content": "Transfer 100 EUR to {{iban}}" }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 403
+  res.body.error.code: eq classification_exceeds_clearance
+}
+
+docs {
+  Same prompt as 02, with the other demo key, which is cleared for
+  `internal` data only.
+}

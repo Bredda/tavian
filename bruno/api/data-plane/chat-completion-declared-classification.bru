@@ -1,0 +1,31 @@
+meta {
+  name: Chat completion (declared classification)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: inherit
+}
+
+headers {
+  X-Tavian-Classification: confidential
+}
+
+body:json {
+  {
+    "model": "{{model}}",
+    "messages": [
+      { "role": "user", "content": "Summarise the quarterly meeting notes" }
+    ]
+  }
+}
+
+docs {
+  `X-Tavian-Classification` (public, internal, confidential, restricted)
+  raises the label of the request; it never lowers what Tavian finds in the
+  content. The answer is 403 `classification_exceeds_clearance` when the key
+  is not cleared for the label.
+}

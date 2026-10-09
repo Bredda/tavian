@@ -1,0 +1,36 @@
+meta {
+  name: Chat completion
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "model": "{{model}}",
+    "messages": [
+      { "role": "system", "content": "You are a concise assistant." },
+      { "role": "user", "content": "Say hello in one word." }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("the answer carries a decision id", function () {
+    expect(res.getHeader("x-tavian-decision-id")).to.be.a("string").and.not.empty;
+  });
+}
+
+docs {
+  Every answer carries an `X-Tavian-Decision-Id` header: the decision
+  record that says why the request was served (or refused).
+}

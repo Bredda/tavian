@@ -1,0 +1,41 @@
+meta {
+  name: 05 E-mail addresses never reach a model
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{dataUrl}}/v1/chat/completions
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{demoKey}}
+}
+
+body:json {
+  {
+    "model": "demo-chat",
+    "max_tokens": 20,
+    "messages": [
+      { "role": "user", "content": "Write to alice@corp.example" }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.choices[0].message.content: contains [EMAIL_1]
+}
+
+tests {
+  test("the address is not echoed back", function () {
+    expect(res.body.choices[0].message.content).to.not.contain("alice@corp.example");
+  });
+}
+
+docs {
+  The demo policy `mask-emails` replaces the address by a placeholder before
+  the request leaves the gateway; the mock backend echoes what it received.
+}

@@ -1,0 +1,20 @@
+meta {
+  name: Readiness
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{adminUrl}}/readyz
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  Ready when a configuration is loaded and the audit trail can record
+  events. 503 otherwise: a gateway that must refuse requests is not ready.
+}
