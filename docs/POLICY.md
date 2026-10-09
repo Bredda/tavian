@@ -18,7 +18,8 @@ The **built-in baseline** is itself a policy in this format (`internal/policy/ba
 | `spec.classification.infer` | implemented: CEL rules over `finding.*`, `identity.*`, `request.*`; the label is the highest of the rules that match |
 | `spec.inspection.request.on_finding` | implemented: rules `{id, when, action, reason?, classes?}` evaluated once per kind of finding, with `label` available (see below) |
 | `spec.inspection.on_error` | `block` only (the default): a request that cannot be inspected is always refused |
-| `spec.inspection.response`, `spec.inspection.request.rulesets`, `metadata.mode: shadow` | not yet: refused at load with a message (response: M4; detectors are configured under `inspection:` in `tavian.yaml`; shadow: next change) |
+| `metadata.mode` | `enforce` (default) or `shadow`: see below |
+| `spec.inspection.response`, `spec.inspection.request.rulesets` | not yet: refused at load with a message (response: M4; detectors are configured under `inspection:` in `tavian.yaml`) |
 | `spec.quotas`, `spec.audit` | not yet: refused at load (quotas: M2 step 2.5; audit settings: 2.6 and M4) |
 
 ### Actions on findings
@@ -34,6 +35,14 @@ A rule in `spec.inspection.request.on_finding` fires when its `when` is true for
 | `allow` | Explicitly do nothing for this kind (it still appears in the record) |
 
 `redact` is a protection on top of the label, not a way around it: **the label is computed from the findings of the original request**, so a request with a redacted IBAN is still `confidential` and still goes only to internal backends. After redacting, the gateway inspects what it is about to send and **refuses the request (`redaction_failed`, 500) if any redacted value is still there**, which also catches a value that only became detectable once its neighbour was replaced. If the request has more findings than the engine keeps (1000), it cannot be sure to have replaced them all and is refused (`redaction_incomplete`, 400). The decision record counts the redactions per kind, never the values. Redaction applies to every string of the request, like inspection.
+
+### Shadow mode
+
+A policy with `metadata.mode: shadow` is **evaluated for every request it applies to and enforces nothing**. The decision in force is exactly what it would be without it; the decision record gets a `shadow` section that says what the shadow policies would have changed: a block (`would_refuse`, with the rule's reason), a model they would have denied, a different label (and whether the caller's clearance would have been exceeded), different destinations, redactions that would have been made. The metric `tavian_policy_shadow_total{change}` counts them (`model`, `block`, `label`, `destinations`, `redact`, `clearance`, `error`), so a dashboard can show how many requests a candidate policy would affect before anyone turns it on. A shadow policy that fails to evaluate is reported in `shadow.error` and never fails the request. Switch to enforcement by removing `mode: shadow` and reloading. The built-in baseline is always enforced.
+
+### Testing policies
+
+`tavian policy test -config tavian.yaml fixtures.yaml...` (files or directories) runs fixtures against the configuration and policies. A case says who sends what (`caller`, `request`, and `content` to inspect with the configured detectors, or `findings` stated directly) and what must come out (`expect`: `outcome`, `reason`, `label`, `destinations`, `backend`, `redact`, `flagged`, `rules`, `shadow`); only what is given is checked. The cases run through `internal/pipeline`, the code the gateway itself uses to authorize the model, apply the policies, check the clearance, route and assert the route, so a passing fixture is a statement about the gateway and not about a copy of it. The exit status is 1 when a case fails: run it in CI next to your policy files. Examples: [configs/policy-tests/](../configs/policy-tests/) (`make policy-test`).
 
 Anything not implemented is **refused when the policy is loaded**, never ignored, because a policy that silently does less than it says is worse than none. `tavian validate -config tavian.yaml` loads and checks the policies and prints warnings.
 
@@ -175,9 +184,9 @@ CEL is non-Turing-complete, side-effect free and bounded in cost, which makes po
 
 1. **Author** in YAML (Git is the recommended source of truth), or via the admin API.
 2. **Validate**: schema, CEL type-check, referential integrity (models, rulesets), conflict and unreachable-rule linting.
-3. **Test**: `tavian policy test` runs fixtures (`request + identity → expected decision`) in CI.
+3. **Test**: `tavian policy test` runs fixtures (`request + identity → expected decision`) in CI (implemented).
 4. **Simulate**: replay recorded decision inputs (metadata, never content unless stored) against a candidate policy and diff the outcomes.
-5. **Shadow**: deploy in `shadow` mode — evaluate and record "would have blocked", enforce nothing.
+5. **Shadow**: deploy in `shadow` mode — evaluate and record "would have blocked", enforce nothing (implemented).
 6. **Enforce**: publish a new `ConfigRevision`; optional two-person approval for guardrail changes.
 7. **Distribute offline**: policies and rulesets are packaged as **signed bundles** that can be carried into air-gapped sites and verified on load.
 8. **Roll back**: revisions are immutable; rollback = re-publish a previous revision.

@@ -1,0 +1,31 @@
+# A configuration for the policy fixtures next to it: the policies of
+# ../policies, a custom dictionary, and an on-premises and an external backend.
+# Run the fixtures with:
+#
+#   tavian policy test -config configs/policy-tests/tavian.yaml configs/policy-tests/cases/
+#
+# Nothing here is contacted: policy tests only evaluate.
+profile: controlled-egress
+
+policy:
+  dir: ../policies
+
+inspection:
+  dictionaries:
+    - { name: codenames, severity: high, terms: ["Projet Aurore"] }
+
+backends:
+  - { id: local, type: openai, base_url: "http://vllm.internal:8000/v1", destination_class: internal }
+  - { id: partner, type: openai, base_url: "https://eu.example.com/v1", destination_class: approved-external }
+
+models:
+  - { name: llama-70b, type: chat, route: [{ backend: local }] }
+  - { name: shared, type: chat, route: [{ backend: partner }, { backend: local }] }
+  - { name: partner-only, type: chat, route: [{ backend: partner }] }
+
+api_keys:
+  - id: placeholder
+    hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    team: research
+    application: notebook
+    allowed_models: ["*"]

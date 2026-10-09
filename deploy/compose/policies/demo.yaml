@@ -1,0 +1,37 @@
+# Policies of the demo stack. They apply on top of the built-in baseline (IBANs,
+# cards and national ids are confidential; secrets are restricted) and can only
+# narrow it. Edit them and reload with:  docker compose kill -s HUP tavian
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata:
+  name: demo-guardrails
+  description: Secrets are refused and e-mail addresses never reach a model
+spec:
+  scope: { organization: true }
+  inspection:
+    request:
+      on_finding:
+        - id: no-secrets
+          when: finding.type == "secret"
+          action: block
+          reason: SECRET_IN_PROMPT
+        - id: mask-emails
+          when: finding.subtype == "email"
+          action: redact
+---
+# A policy being tried out: it is evaluated for every request but enforces
+# nothing. The decision records say what it WOULD have done (see the README).
+apiVersion: tavian/v1alpha1
+kind: Policy
+metadata:
+  name: trial-no-ip-addresses
+  mode: shadow
+spec:
+  scope: { organization: true }
+  inspection:
+    request:
+      on_finding:
+        - id: no-ips
+          when: finding.subtype == "ipv4"
+          action: block
+          reason: IP_ADDRESS_IN_PROMPT

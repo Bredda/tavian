@@ -33,6 +33,7 @@ Commands:
   serve      Run the gateway
   validate   Check a configuration file and exit
   migrate    Apply pending database migrations and exit
+  policy     Test policies against fixtures: tavian policy test
   keygen     Generate an API key and the hash to put in the configuration
   version    Print the version
 
@@ -53,6 +54,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdValidate(args[1:], stdout, stderr)
 	case "migrate":
 		return cmdMigrate(args[1:], stdout, stderr)
+	case "policy":
+		return cmdPolicy(args[1:], stdout, stderr)
 	case "keygen":
 		return cmdKeygen(stdout, stderr)
 	case "version":
