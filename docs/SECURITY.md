@@ -172,7 +172,7 @@ Default: `hash`. Storing content is a conscious, policy-level decision with a ma
 - API keys: shown once (`tavian keygen`), stored only as a SHA-256 hash, never in clear. Keys are 256-bit random values, so there is nothing to brute-force and a salt would add nothing: the hash is only a lookup handle. The `tav_` prefix marks the secret's type for secret scanners; the key's identity is its configured `id`, which is what usage events carry.
 - Key lifecycle ([API_KEYS.md](API_KEYS.md)): *revoke* by removing the entry and reloading (`SIGHUP`, effective on the next request); *rotate* by adding the new key next to the old one, moving clients over, then removing the old one, with no downtime; *expire* with `expires_at` (refused from that instant, named in the logs, counted in metrics). Each key and each OIDC group mapping carries a `max_classification` clearance, enforced against the label of every request ([data classification](#data-classification)). Database-backed keys with last-use tracking come with the admin API (M3).
 - OIDC access tokens are verified locally and cannot be revoked before they expire: keep their lifetime short at the identity provider ([ADR-0002](adr/0002-generic-oidc.md)).
-- Admin API uses OIDC with MFA enforced at the IdP.
+- Administration API: its own tokens (`tavadm_`, `tavian keygen -admin`), stored as SHA-256 like API keys, in `admin.tokens` with an id that names the author of every change; the data plane's keys and tokens are not accepted there and the reverse ([ADMIN_API.md](ADMIN_API.md)). Sign-in through OIDC with MFA enforced at the IdP is planned.
 
 ## Limits and residual risk
 
@@ -191,7 +191,7 @@ We state these plainly rather than hide them:
 Status on main after v0.1.0. Items are meant to become tests.
 
 - [x] Run as non-root, read-only filesystem, no capabilities (image and compose file)
-- [x] Separate listeners/ports for data plane and admin
+- [x] Separate listeners/ports for data plane and admin, with separate credentials; every administrative change is recorded before it is made and chained ([ADMIN_API.md](ADMIN_API.md))
 - [ ] TLS everywhere; mTLS to PostgreSQL and internal backends where possible. *Database TLS works through the URL; native listener TLS and backend mTLS: M3*
 - [x] Request size, header, and concurrency limits (`limits.max_request_bytes`, header timeout, `limits.max_inflight`)
 - [x] CI check that no code path logs request/response bodies: a canary test sends sensitive values down the answered, streamed, backend-error, refused and inspection-failure paths and checks the logs (debug level), metrics, usage events and error bodies. *No lint rule yet; the response path is covered once response inspection exists*

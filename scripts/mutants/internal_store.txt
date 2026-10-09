@@ -1,0 +1,11 @@
+# Mutants for the admin changes of internal/store, see scripts/mutate.sh (needs TAVIAN_TEST_DATABASE_URL).
+# file	old	new
+internal/store/admin.go	limit = min(max(limit, 1), 500)	limit = min(max(limit, 1), 5)
+internal/store/admin.go	FROM admin_changes WHERE seq < $1 ORDER BY seq DESC LIMIT $2`, before, limit+1)	FROM admin_changes WHERE seq < $1 ORDER BY seq ASC LIMIT $2`, before, limit+1)
+internal/store/admin.go	before, limit+1)	before, limit)
+internal/store/admin.go	changes[:limit], seqs[limit-1]	changes[:limit], seqs[limit]
+internal/store/admin.go	if before <= 0 {	if before < 0 {
+internal/store/admin.go	defer func() { _ = tx.Rollback(ctx) }()	defer func() {}()
+internal/store/admin.go	detail = json.RawMessage("{}")	detail = json.RawMessage("[]")
+internal/store/admin.go	c.EventID, KindAdminChange, c.OccurredAt, payload)	c.EventID, "usage", c.OccurredAt, payload)
+internal/store/admin.go	c.EventID, c.OccurredAt, c.Actor, c.Action, c.Target, c.Outcome, c.RequestID, c.RemoteAddr, string(detail))	c.EventID, c.OccurredAt, c.Actor, c.Action, c.Target, c.Outcome, c.RemoteAddr, c.RequestID, string(detail))

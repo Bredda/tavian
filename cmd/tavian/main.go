@@ -17,10 +17,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bredda/tavian/internal/admin"
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/chain"
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/egress"
+	"github.com/bredda/tavian/internal/ids"
 	"github.com/bredda/tavian/internal/meter"
 	"github.com/bredda/tavian/internal/outbox"
 	"github.com/bredda/tavian/internal/provider/openai"
@@ -39,7 +41,7 @@ Commands:
   validate   Check a configuration file and exit
   migrate    Apply pending database migrations and exit
   policy     Test policies against fixtures: tavian policy test
-  keygen     Generate an API key and the hash to put in the configuration
+  keygen     Generate an API key (or, with -admin, an administration token) and the hash to put in the configuration
   audit-keygen  Generate the key that signs the seals of the audit chain
   verify-audit  Check the audit chain, its seals and the records it covers
   version    Print the version
@@ -64,7 +66,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "policy":
 		return cmdPolicy(args[1:], stdout, stderr)
 	case "keygen":
-		return cmdKeygen(stdout, stderr)
+		return cmdKeygen(args[1:], stdout, stderr)
 	case "audit-keygen":
 		return cmdAuditKeygen(args[1:], stdout, stderr)
 	case "verify-audit":
@@ -89,7 +91,23 @@ func configFlag(fs *flag.FlagSet) *string {
 	return fs.String("config", def, "path to the configuration file (env TAVIAN_CONFIG)")
 }
 
-func cmdKeygen(stdout, stderr io.Writer) int {
+func cmdKeygen(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	admin := fs.Bool("admin", false, "generate a token of the administration API instead of an API key")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *admin {
+		token, hash, err := auth.GenerateAdminToken()
+		if err != nil {
+			fmt.Fprintln(stderr, "tavian:", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "token: %s\nhash:  %s\n", token, hash)
+		fmt.Fprintln(stderr, "\nStore the token now, it cannot be recovered. Put only the hash in the configuration (admin.tokens[].hash) with an id that names its holder.")
+		return 0
+	}
 	key, hash, err := auth.GenerateKey()
 	if err != nil {
 		fmt.Fprintln(stderr, "tavian:", err)
@@ -288,9 +306,14 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		IdleTimeout:       120 * time.Second,
 		// No WriteTimeout: streamed completions can legitimately last minutes.
 	}
-	admin := &http.Server{
+	rl := &reloader{log: log, path: *path, running: cfg, holder: holder, st: st, qs: qstore}
+	adminAPI := &admin.Deps{Log: log, Reload: rl.reload}
+	if st != nil {
+		adminAPI.Store = st
+	}
+	adminSrv := &http.Server{
 		Addr:              cfg.Listen.Admin,
-		Handler:           server.NewAdminHandler(holder, metrics, audit),
+		Handler:           server.NewAdminHandler(holder, metrics, audit, adminAPI),
 		ReadHeaderTimeout: cfg.Limits.ReadHeaderTimeout,
 	}
 
@@ -300,12 +323,12 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
-			reload(ctx, log, *path, cfg, holder, st, qstore)
+			rl.sighup(ctx)
 		}
 	}()
 
 	errc := make(chan error, 2)
-	for name, srv := range map[string]*http.Server{"data": data, "admin": admin} {
+	for name, srv := range map[string]*http.Server{"data": data, "admin": adminSrv} {
 		go func() {
 			log.Info("listening", "listener", name, "addr", srv.Addr)
 			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
@@ -327,7 +350,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Limits.ShutdownGrace)
 	defer cancel()
-	for _, srv := range []*http.Server{data, admin} {
+	for _, srv := range []*http.Server{data, adminSrv} {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Error("shutdown", "error", err)
 			code = 1
@@ -470,48 +493,115 @@ func saveRevision(ctx context.Context, st *store.Store, snap *config.Snapshot, r
 	})
 }
 
+// reloader recompiles the configuration file, for SIGHUP and for the
+// administration API. One reload runs at a time.
+type reloader struct {
+	mu      sync.Mutex
+	log     *slog.Logger
+	path    string
+	running *config.Config
+	holder  *config.Holder
+	st      *store.Store
+	qs      *quota.Store
+}
+
 // reload recompiles the configuration file. The new revision is recorded in
 // the database before it goes live, so every usage event can be traced back to
-// a stored configuration; if that fails, or anything fails validation, the
-// current revision stays.
-func reload(ctx context.Context, log *slog.Logger, path string, running *config.Config, holder *config.Holder, st *store.Store, qs *quota.Store) {
-	cfg, raw, err := config.Load(path)
-	if err == nil && cfg.Profile != running.Profile {
-		err = fmt.Errorf("profile changed from %q to %q: restart required", running.Profile, cfg.Profile)
-	}
-	if err == nil && cfg.Database != running.Database {
-		err = errors.New("database settings changed: restart required")
-	}
-	if err == nil && (cfg.Audit != running.Audit || cfg.Workers != running.Workers || !reflect.DeepEqual(cfg.Outbox, running.Outbox)) {
-		err = errors.New("audit, workers or outbox settings changed: restart required")
-	}
-	if err == nil && !sameOIDCConnection(cfg.OIDC, running.OIDC) {
-		err = errors.New("oidc settings other than mappings changed: restart required")
-	}
-	var snap *config.Snapshot
-	if err == nil {
-		snap, err = config.Compile(cfg, raw, os.Getenv)
-	}
-	if err == nil && st != nil {
-		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = saveRevision(rctx, st, snap, raw)
-		if err == nil && qs != nil {
-			// a policy added now may limit a scope that has been using tokens all day
-			err = seedQuotas(rctx, log, st, qs, snap)
-		}
-		cancel()
-	}
+// a stored configuration, and so is the change itself (record, who asked for
+// it); if either fails, or anything fails validation, the current revision
+// stays.
+//
+// A refusal is an *admin.Rejection; any other error is a failure of the
+// gateway's own (the database, for instance).
+func (r *reloader) reload(ctx context.Context, record admin.Record) (admin.Reloaded, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	previous := r.holder.Load().Revision
+	cfg, raw, err := config.Load(r.path)
 	if err != nil {
-		log.Error("configuration reload rejected, keeping current revision",
-			"current", holder.Load().Revision, "error", err)
-		return
+		return admin.Reloaded{}, &admin.Rejection{Code: "invalid_configuration", Message: err.Error()}
 	}
-	holder.Store(snap)
-	logKeyExpiries(log, snap, time.Now())
-	logInspection(log, snap)
-	logPolicies(log, snap)
-	log.Info("configuration reloaded", "revision", snap.Revision,
+	if err := restartRequired(r.running, cfg); err != nil {
+		return admin.Reloaded{}, &admin.Rejection{Code: "restart_required", Message: err.Error(), Status: http.StatusConflict}
+	}
+	snap, err := config.Compile(cfg, raw, os.Getenv)
+	if err != nil {
+		return admin.Reloaded{}, &admin.Rejection{Code: "invalid_configuration", Message: err.Error()}
+	}
+	if r.st != nil {
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := saveRevision(rctx, r.st, snap, raw); err != nil {
+			return admin.Reloaded{}, err
+		}
+		if r.qs != nil {
+			// a policy added now may limit a scope that has been using tokens all day
+			if err := seedQuotas(rctx, r.log, r.st, r.qs, snap); err != nil {
+				return admin.Reloaded{}, err
+			}
+		}
+	}
+	if record != nil {
+		if err := record(snap.Revision, map[string]any{"previous": previous, "unchanged": previous == snap.Revision}); err != nil {
+			return admin.Reloaded{}, err
+		}
+	}
+	r.holder.Store(snap)
+	logKeyExpiries(r.log, snap, time.Now())
+	logInspection(r.log, snap)
+	logPolicies(r.log, snap)
+	r.log.Info("configuration reloaded", "revision", snap.Revision,
 		"backends", len(snap.Backends), "models", len(snap.Models))
+	return admin.Reloaded{Revision: snap.Revision, Previous: previous}, nil
+}
+
+// sighup is the reload that SIGHUP asks for. It leaves the same trace as the
+// administration API, under the actor "sighup".
+func (r *reloader) sighup(ctx context.Context) {
+	rec := func(target, outcome string, detail any) error {
+		if r.st == nil {
+			return nil
+		}
+		var raw json.RawMessage
+		if detail != nil {
+			b, err := json.Marshal(detail)
+			if err != nil {
+				return err
+			}
+			raw = b
+		}
+		return r.st.RecordAdminChange(ctx, store.AdminChange{
+			EventID: ids.New(), OccurredAt: time.Now().UTC(), Actor: "sighup", Action: admin.ActionReload,
+			Target: target, Outcome: outcome, Detail: raw,
+		})
+	}
+	_, err := r.reload(ctx, func(target string, detail any) error { return rec(target, store.OutcomeApplied, detail) })
+	if err != nil {
+		var rej *admin.Rejection
+		if errors.As(err, &rej) {
+			if rerr := rec("", store.OutcomeRejected, map[string]string{"code": rej.Code}); rerr != nil {
+				r.log.Error("the rejection of a reload could not be recorded", "error", rerr)
+			}
+		}
+		r.log.Error("configuration reload rejected, keeping current revision",
+			"current", r.holder.Load().Revision, "error", err)
+	}
+}
+
+// restartRequired says why a configuration cannot replace the running one
+// without a restart; nil when it can.
+func restartRequired(running, cfg *config.Config) error {
+	switch {
+	case cfg.Profile != running.Profile:
+		return fmt.Errorf("profile changed from %q to %q: restart required", running.Profile, cfg.Profile)
+	case cfg.Database != running.Database:
+		return errors.New("database settings changed: restart required")
+	case cfg.Audit != running.Audit || cfg.Workers != running.Workers || !reflect.DeepEqual(cfg.Outbox, running.Outbox):
+		return errors.New("audit, workers or outbox settings changed: restart required")
+	case !sameOIDCConnection(cfg.OIDC, running.OIDC):
+		return errors.New("oidc settings other than mappings changed: restart required")
+	}
+	return nil
 }
 
 // logInspection says how content inspection is set up, and warns about the

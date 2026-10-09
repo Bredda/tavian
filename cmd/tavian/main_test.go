@@ -3,15 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bredda/tavian/internal/admin"
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/store/storetest"
 )
 
 func TestKeygenAndValidate(t *testing.T) {
@@ -109,17 +113,44 @@ api_keys:
 	holder := &config.Holder{}
 	holder.Store(snap)
 
+	rl := &reloader{log: log, running: cfg, holder: holder}
+
 	// Changing the database section needs a restart: the revision must not move.
 	t.Setenv("TAVIAN_RELOAD_TEST_DB", "postgres://x")
-	reload(context.Background(), log, write("database:\n  url_env: TAVIAN_RELOAD_TEST_DB\n"), cfg, holder, nil, nil)
+	rl.path = write("database:\n  url_env: TAVIAN_RELOAD_TEST_DB\n")
+	rl.sighup(context.Background())
 	if holder.Load() != snap {
 		t.Error("reload with a changed database section was applied")
 	}
+	_, err = rl.reload(context.Background(), nil)
+	var rej *admin.Rejection
+	if !errors.As(err, &rej) || rej.Code != "restart_required" || rej.Status != http.StatusConflict {
+		t.Errorf("err = %v, want a restart_required rejection", err)
+	}
 
-	// An unrelated, valid change is applied.
-	reload(context.Background(), log, write("log: {level: debug}\n"), cfg, holder, nil, nil)
-	if holder.Load() == snap {
-		t.Error("valid reload was not applied")
+	// A file that does not compile is a rejection too.
+	rl.path = write("limits: {max_inflight: -1}\nmodels: []\n")
+	if _, err = rl.reload(context.Background(), nil); !errors.As(err, &rej) || rej.Code != "invalid_configuration" {
+		t.Errorf("err = %v, want an invalid_configuration rejection", err)
+	}
+
+	// If the change cannot be recorded, it is not made.
+	rl.path = write("log: {level: debug}\n")
+	if _, err = rl.reload(context.Background(), func(string, any) error { return errors.New("database down") }); err == nil || errors.As(err, &rej) {
+		t.Errorf("err = %v, want the failure of the record", err)
+	}
+	if holder.Load() != snap {
+		t.Error("a change that could not be recorded was applied")
+	}
+
+	// An unrelated, valid change is applied, after being recorded.
+	var recorded string
+	res, err := rl.reload(context.Background(), func(target string, _ any) error { recorded = target; return nil })
+	if err != nil || holder.Load() == snap {
+		t.Fatalf("valid reload was not applied: %v", err)
+	}
+	if recorded != holder.Load().Revision || res.Revision != recorded || res.Previous != snap.Revision {
+		t.Errorf("recorded %q, result %+v, running %q", recorded, res, holder.Load().Revision)
 	}
 }
 
@@ -208,5 +239,94 @@ api_keys:
 	errOut.Reset()
 	if code := run([]string{"validate", "-config", cfg}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "p.yaml") || !strings.Contains(errOut.String(), "check the field names") {
 		t.Errorf("exit = %d, stderr %q", code, errOut.String())
+	}
+}
+
+func TestKeygenAdminMakesAnAdminToken(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"keygen", "-admin"}, &out, &errOut); code != 0 {
+		t.Fatalf("keygen -admin exit = %d: %s", code, errOut.String())
+	}
+	var token, hash string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if v, ok := strings.CutPrefix(l, "token: "); ok {
+			token = strings.TrimSpace(v)
+		}
+		if v, ok := strings.CutPrefix(l, "hash:  "); ok {
+			hash = strings.TrimSpace(v)
+		}
+	}
+	if !strings.HasPrefix(token, auth.AdminTokenPrefix) || hash != "sha256:"+auth.HashKey(token) {
+		t.Errorf("output = %q", out.String())
+	}
+	if code := run([]string{"keygen", "-bogus"}, &out, &errOut); code != 2 {
+		t.Errorf("unknown flag exit = %d, want 2", code)
+	}
+}
+
+// A reload by signal leaves the same trace as one through the API, under the
+// actor "sighup", in the database and in the outbox the audit chain reads.
+func TestSighupIsRecordedLikeAnAdminChange(t *testing.T) {
+	st, _ := storetest.New(t)
+	_, hash, _ := auth.GenerateKey()
+	path := filepath.Join(t.TempDir(), "tavian.yaml")
+	write := func(extra string) {
+		body := `profile: air-gapped
+` + extra + `backends:
+  - {id: local, type: openai, base_url: "http://127.0.0.1:9/v1", destination_class: internal}
+models:
+  - {name: m, type: chat, route: [{backend: local}]}
+api_keys:
+  - {id: dev, hash: "` + hash + `", team: t, application: a, allowed_models: ["*"]}
+`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("")
+	cfg, raw, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := config.Compile(cfg, raw, os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := &config.Holder{}
+	holder.Store(snap)
+	rl := &reloader{log: slog.New(slog.DiscardHandler), path: path, running: cfg, holder: holder, st: st}
+
+	write("log: {level: debug}\n")
+	rl.sighup(context.Background())
+	write("limits: {max_inflight: -1}\nmodels: not-a-list\n")
+	rl.sighup(context.Background())
+
+	rows, err := st.Pool().Query(context.Background(),
+		`SELECT actor, action, outcome, target, (SELECT count(*) FROM outbox o WHERE o.event_id = c.event_id AND o.kind = 'admin_change')
+		 FROM admin_changes c ORDER BY seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type rec struct {
+		actor, action, outcome, target string
+		events                         int
+	}
+	var got []rec
+	for rows.Next() {
+		var r rec
+		if err := rows.Scan(&r.actor, &r.action, &r.outcome, &r.target, &r.events); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+	}
+	if len(got) != 2 {
+		t.Fatalf("records = %+v, want the reload and the refusal", got)
+	}
+	if want := (rec{"sighup", "config.reload", "applied", holder.Load().Revision, 1}); got[0] != want {
+		t.Errorf("first = %+v, want %+v", got[0], want)
+	}
+	if got[1].actor != "sighup" || got[1].action != "config.reload" || got[1].outcome != "rejected" || got[1].events != 1 {
+		t.Errorf("second = %+v", got[1])
 	}
 }

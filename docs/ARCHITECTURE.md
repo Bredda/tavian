@@ -50,7 +50,7 @@ In every profile, **no component other than the gateway data plane** (IdP, datab
 Stateless-ish request path. Holds an immutable in-memory **config snapshot** (models, backends, policies, quotas, API key hashes, rulesets). Never queries PostgreSQL to serve a request.
 
 ### Control plane
-Admin API (and CLI, later UI). Validates and versions configuration, produces a new snapshot revision, publishes it. In the baseline it lives in the same binary as the data plane, behind a separate listener and separate authentication; the boundary is a package boundary now and can become a process boundary later ([ADR-0003](adr/0003-config-snapshots-and-plane-separation.md)).
+Admin API (and CLI, later UI), described in [ADMIN_API.md](ADMIN_API.md). Validates and versions configuration, produces a new snapshot revision, publishes it; today it reloads the configuration file, shows the running revision and lists the changes made. In the baseline it lives in the same binary as the data plane, behind a separate listener and separate authentication; the boundary is a package boundary now and can become a process boundary later ([ADR-0003](adr/0003-config-snapshots-and-plane-separation.md)).
 
 ### Egress guard
 The only code path that opens outbound connections: to model backends, to the identity provider and to PostgreSQL. It resolves destinations against the configured endpoints and the active profile, and refuses anything else; internal endpoints (every one under `air-gapped`, and the database always) must resolve to internal addresses, checked on every resolved address. A lint rule keeps other packages from dialing ([ADR-0008](adr/0008-single-egress-point-and-deployment-profiles.md)).
@@ -184,7 +184,7 @@ internal/audit/            ✓ decision records and reason codes (encryption: M4
 internal/outbox/           ✓ consumers of the outbox: cursors, one runner per consumer, xid horizon; the pruner (retention)
 internal/rollup/           ✓ hourly usage sums (usage_hourly) and the rebuild of daily token counters
 internal/chain/            ✓ audit hash chain, signed seals, verification (`tavian verify-audit`)
-internal/admin/            · control-plane API (M3)
+internal/admin/            ✓ control-plane API: tokens, change records, reload (docs/ADMIN_API.md)
 internal/store/            ✓ PostgreSQL access (pgx): embedded migrations, outbox, config revisions
 internal/spool/            ✓ bounded on-disk queue for events while PostgreSQL is down
 ```

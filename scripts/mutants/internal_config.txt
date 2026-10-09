@@ -1,0 +1,8 @@
+# Mutants for the admin tokens of internal/config, see scripts/mutate.sh.
+# file	old	new
+internal/config/snapshot.go	if adminIDs[t.ID] {	if false {
+internal/config/snapshot.go	adminIDs[t.ID] = true	adminIDs[t.ID] = false
+internal/config/snapshot.go	if _, dup := s.AdminTokens[h]; dup {	if _, dup := s.AdminTokens[h]; false && dup {
+internal/config/snapshot.go	if len(cfg.Admin.Tokens) > 0 && cfg.Database.URLEnv == "" {	if len(cfg.Admin.Tokens) > 1 && cfg.Database.URLEnv == "" {
+internal/config/snapshot.go	s.AdminTokens[h] = &t	s.Keys[h] = &APIKey{ID: t.ID}
+internal/config/snapshot.go	!idPattern.MatchString(t.ID)	false

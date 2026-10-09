@@ -15,8 +15,15 @@ import (
 // ConsumerName is the name of the sealer's cursor in outbox_consumers.
 const ConsumerName = "audit-chain"
 
-// KindDecision is the outbox kind that is chained.
-const KindDecision = "decision"
+// KindDecision and KindAdminChange are the outbox kinds that are chained:
+// what the gateway decided, and what the administrators changed.
+const (
+	KindDecision    = "decision"
+	KindAdminChange = "admin_change"
+)
+
+// chained are the kinds of event the chain covers.
+var chained = []string{KindDecision, KindAdminChange}
 
 // Defaults for the zero values of Sealer's fields.
 const (
@@ -60,7 +67,7 @@ func (s *Sealer) Stats() Stats {
 }
 
 func (s *Sealer) Name() string    { return ConsumerName }
-func (s *Sealer) Kinds() []string { return []string{KindDecision} }
+func (s *Sealer) Kinds() []string { return chained }
 
 func (s *Sealer) now() time.Time {
 	if s.Now != nil {

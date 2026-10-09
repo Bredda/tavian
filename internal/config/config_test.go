@@ -905,3 +905,51 @@ models:
 		t.Errorf("warnings = %v", snap.Warnings)
 	}
 }
+
+func compileAdmin(t *testing.T, adminYAML string, getenv map[string]string) (*Snapshot, error) {
+	t.Helper()
+	y := "profile: air-gapped\n" + adminYAML
+	cfg, err := Parse([]byte(y))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Compile(cfg, []byte(y), env(getenv))
+}
+
+func TestAdminTokens(t *testing.T) {
+	db := map[string]string{"DB_URL": "postgres://x"}
+	const withDB = "database: {url_env: DB_URL}\n"
+	s, err := compileAdmin(t, withDB+"admin:\n  tokens:\n    - {id: ops-alice, hash: "+hashA+"}\n    - {id: ci, hash: \""+strings.ToUpper(hashB)+"\"}\n", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.AdminTokens) != 2 || s.AdminTokens[strings.Repeat("a", 64)].ID != "ops-alice" || s.AdminTokens[strings.Repeat("b", 64)].ID != "ci" {
+		t.Errorf("tokens = %+v", s.AdminTokens)
+	}
+	if len(s.Keys) != 0 {
+		t.Error("an admin token became an API key")
+	}
+
+	none, err := compileAdmin(t, "", nil)
+	if err != nil || len(none.AdminTokens) != 0 {
+		t.Errorf("no tokens: %v %v", none.AdminTokens, err)
+	}
+
+	for name, c := range map[string]struct{ yaml, want string }{
+		"bad id":         {withDB + "admin:\n  tokens: [{id: Alice!, hash: " + hashA + "}]\n", "id"},
+		"duplicate id":   {withDB + "admin:\n  tokens: [{id: a, hash: " + hashA + "}, {id: a, hash: " + hashB + "}]\n", "duplicate id"},
+		"duplicate hash": {withDB + "admin:\n  tokens: [{id: a, hash: " + hashA + "}, {id: b, hash: " + hashA + "}]\n", "duplicate hash"},
+		"short hash":     {withDB + "admin:\n  tokens: [{id: a, hash: \"sha256:abc\"}]\n", "tavian keygen -admin"},
+		"no prefix":      {withDB + "admin:\n  tokens: [{id: a, hash: " + strings.Repeat("a", 64) + "}]\n", "sha256:"},
+		"not hex":        {withDB + "admin:\n  tokens: [{id: a, hash: \"sha256:" + strings.Repeat("z", 64) + "\"}]\n", "valid hex"},
+		"no database":    {"admin:\n  tokens: [{id: a, hash: " + hashA + "}]\n", "database.url_env"},
+	} {
+		if _, err := compileAdmin(t, c.yaml, db); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+		}
+	}
+	// an unknown key in the section is a typo, not a weaker setting
+	if _, err := Parse([]byte("profile: air-gapped\nadmin:\n  token: []\n")); err == nil {
+		t.Error("an unknown field of admin was accepted")
+	}
+}

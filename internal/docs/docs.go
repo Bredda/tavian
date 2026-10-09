@@ -15,25 +15,31 @@ import (
 //go:embed openapi.yaml
 var spec string
 
+//go:embed admin-openapi.yaml
+var adminSpec string
+
 //go:embed assets/scalar.js
 var viewer []byte
 
-// page loads the viewer from our own origin. Fonts are not fetched from the
-// Scalar CDN, telemetry and the agent/MCP features are off.
-const page = `<!doctype html>
+// pageFor loads the viewer from our own origin and the given description.
+// Fonts are not fetched from the Scalar CDN, telemetry and the agent/MCP
+// features are off.
+func pageFor(title, specURL, viewerURL string) []byte {
+	return []byte(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tavian API</title>
+<title>` + title + `</title>
 <link rel="icon" href="data:,">
 </head>
 <body>
-<script id="api-reference" data-url="/openapi.yaml" data-configuration='{"withDefaultFonts":false,"telemetry":false,"agent":{"disabled":true},"mcp":{"disabled":true},"hideClientButton":true,"documentDownloadType":"none","showDeveloperTools":"never","hideModels":true}'></script>
-<script src="/docs/scalar.js"></script>
+<script id="api-reference" data-url="` + specURL + `" data-configuration='{"withDefaultFonts":false,"telemetry":false,"agent":{"disabled":true},"mcp":{"disabled":true},"hideClientButton":true,"documentDownloadType":"none","showDeveloperTools":"never","hideModels":true}'></script>
+<script src="` + viewerURL + `"></script>
 </body>
 </html>
-`
+`)
+}
 
 // csp keeps the page, and whatever the viewer does, on its own origin. Scalar
 // injects <style> elements and uses data: images and fonts.
@@ -47,9 +53,22 @@ type Enabled func() bool
 
 // Register adds GET /docs, /docs/scalar.js and /openapi.yaml to mux.
 func Register(mux *http.ServeMux, version string, enabled Enabled) {
+	register(mux, enabled, spec, version, "Tavian API", "/docs", "/openapi.yaml")
+}
+
+// RegisterAdmin adds the reference of the administration API to mux:
+// GET /admin/docs, /admin/docs/scalar.js and /admin/v1/openapi.yaml. enabled
+// is asked on every request.
+func RegisterAdmin(mux *http.ServeMux, version string, enabled Enabled) {
+	register(mux, enabled, adminSpec, version, "Tavian administration API", "/admin/docs", "/admin/v1/openapi.yaml")
+}
+
+func register(mux *http.ServeMux, enabled Enabled, spec, version, title, pagePath, specPath string) {
 	yaml := []byte(strings.ReplaceAll(spec, "{{VERSION}}", version))
 	sum := sha256.Sum256(viewer)
 	viewerTag := `"` + hex.EncodeToString(sum[:8]) + `"`
+	viewerPath := pagePath + "/scalar.js"
+	page := pageFor(title, specPath, viewerPath)
 
 	serve := func(contentType string, body []byte, etag string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +92,7 @@ func Register(mux *http.ServeMux, version string, enabled Enabled) {
 			_, _ = w.Write(body)
 		}
 	}
-	mux.HandleFunc("GET /docs", serve("text/html; charset=utf-8", []byte(page), ""))
-	mux.HandleFunc("GET /docs/scalar.js", serve("text/javascript; charset=utf-8", viewer, viewerTag))
-	mux.HandleFunc("GET /openapi.yaml", serve("application/yaml; charset=utf-8", yaml, ""))
+	mux.HandleFunc("GET "+pagePath, serve("text/html; charset=utf-8", page, ""))
+	mux.HandleFunc("GET "+viewerPath, serve("text/javascript; charset=utf-8", viewer, viewerTag))
+	mux.HandleFunc("GET "+specPath, serve("application/yaml; charset=utf-8", yaml, ""))
 }

@@ -198,7 +198,7 @@ api_keys:
 	}
 	gw := httptest.NewServer(NewDataHandler(deps))
 	t.Cleanup(gw.Close)
-	admin := httptest.NewServer(NewAdminHandler(holder, m, nil))
+	admin := httptest.NewServer(NewAdminHandler(holder, m, nil, nil))
 	t.Cleanup(admin.Close)
 	return &fixture{gw: gw, admin: admin, sink: sink, key: key, narrow: narrow, conf: conf, top: top, partnerCalls: partnerCalls}
 }
@@ -484,7 +484,7 @@ func TestAdminEndpoints(t *testing.T) {
 }
 
 func TestReadyzWithoutSnapshot(t *testing.T) {
-	ts := httptest.NewServer(NewAdminHandler(&config.Holder{}, NewMetrics(), nil))
+	ts := httptest.NewServer(NewAdminHandler(&config.Holder{}, NewMetrics(), nil, nil))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/readyz")
 	if err != nil {
@@ -536,7 +536,7 @@ func TestChatIsRefusedWhenAuditTrailCannotRecord(t *testing.T) {
 func TestReadyzReflectsAuditTrail(t *testing.T) {
 	holder := &config.Holder{}
 	holder.Store(&config.Snapshot{})
-	srv := httptest.NewServer(NewAdminHandler(holder, NewMetrics(), refusingSink{}))
+	srv := httptest.NewServer(NewAdminHandler(holder, NewMetrics(), refusingSink{}, nil))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/readyz")
 	if err != nil {

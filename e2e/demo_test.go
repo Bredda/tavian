@@ -122,7 +122,7 @@ func freeAddr(t *testing.T) string {
 // demoConfig is deploy/compose/tavian.yaml with what only Docker needs
 // replaced: where the backends and the database are, and no OIDC provider.
 // Models, prices, keys and policies are the demo's own.
-func demoConfig(t *testing.T, root, dir string, onprem, partner *backend, data, admin string) string {
+func demoConfig(t *testing.T, root, dir string, onprem, partner *backend, data, admin, adminHash string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "tavian.yaml"))
 	if err != nil {
@@ -136,6 +136,7 @@ func demoConfig(t *testing.T, root, dir string, onprem, partner *backend, data, 
 	cfg["listen"] = map[string]any{"data": data, "admin": admin}
 	cfg["database"] = map[string]any{"url_env": "TAVIAN_DATABASE_URL", "spool_dir": filepath.Join(dir, "spool")}
 	cfg["audit"] = map[string]any{"signing_key_file": filepath.Join(dir, "audit.key"), "seal_every_events": 4, "seal_every": "2s"}
+	cfg["admin"] = map[string]any{"tokens": []any{map[string]any{"id": "e2e-admin", "hash": adminHash}}}
 	cfg["workers"] = map[string]any{"poll_interval": "100ms"}
 	cfg["policy"] = map[string]any{"dir": filepath.Join(dir, "policies")}
 	for _, b := range cfg["backends"].([]any) {
@@ -408,9 +409,22 @@ func TestFinanceDemo(t *testing.T) {
 	g := &gateway{
 		t: t, bin: bin, dbURL: dbURL, data: freeAddr(t), admin: freeAddr(t), log: filepath.Join(dir, "gateway.log"),
 	}
-	g.cfg = demoConfig(t, root, dir, onprem, partner, g.data, g.admin)
+	out, code := g.tavian("keygen", "-admin")
+	var adminToken, adminHash string
+	for _, l := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(l, "token: "); ok {
+			adminToken = strings.TrimSpace(v)
+		}
+		if v, ok := strings.CutPrefix(l, "hash:  "); ok {
+			adminHash = strings.TrimSpace(v)
+		}
+	}
+	if code != 0 || adminToken == "" || adminHash == "" {
+		t.Fatalf("keygen -admin (exit %d): %s", code, out)
+	}
+	g.cfg = demoConfig(t, root, dir, onprem, partner, g.data, g.admin, adminHash)
 
-	out, code := g.tavian("audit-keygen", "-out", filepath.Join(dir, "audit.key"))
+	out, code = g.tavian("audit-keygen", "-out", filepath.Join(dir, "audit.key"))
 	if code != 0 {
 		t.Fatalf("audit-keygen: %s", out)
 	}
@@ -555,6 +569,144 @@ func TestFinanceDemo(t *testing.T) {
 		}
 	})
 
+	// 4b. The administrators change the configuration through the API and by
+	//     signal. Each change is recorded with its author before it takes
+	//     effect, and ends up in the audit chain.
+	t.Run("the administrators' changes are recorded and chained", func(t *testing.T) {
+		adminCall := func(method, path, token string) (int, string) {
+			req, _ := http.NewRequest(method, "http://"+g.admin+path, nil)
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, string(b)
+		}
+		rewrite := func(mutate func(cfg map[string]any)) {
+			raw, err := os.ReadFile(g.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg map[string]any
+			if err := yaml.Unmarshal(raw, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			mutate(cfg)
+			out, err := yaml.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(g.cfg, out, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		running := func() string {
+			code, body := adminCall("GET", "/admin/v1/config", adminToken)
+			var c struct{ Revision string }
+			if err := json.Unmarshal([]byte(body), &c); err != nil || code != 200 {
+				t.Fatalf("GET /admin/v1/config: %d %s", code, body)
+			}
+			return c.Revision
+		}
+
+		if code, _ := adminCall("GET", "/admin/v1/whoami", ""); code != 401 {
+			t.Errorf("whoami without a token = %d", code)
+		}
+		if code, _ := adminCall("GET", "/admin/v1/whoami", financeKey); code != 401 {
+			t.Errorf("a data-plane key opened the admin API: %d", code)
+		}
+		if code, body := adminCall("GET", "/admin/v1/whoami", adminToken); code != 200 || !strings.Contains(body, "e2e-admin") {
+			t.Fatalf("whoami = %d %s", code, body)
+		}
+		before := running()
+
+		// a valid change, by the API
+		rewrite(func(cfg map[string]any) { cfg["log"] = map[string]any{"level": "debug"} })
+		code, body := adminCall("POST", "/admin/v1/config/reload", adminToken)
+		var res struct{ Revision, Previous string }
+		_ = json.Unmarshal([]byte(body), &res)
+		if code != 200 || res.Previous != before || res.Revision == before || running() != res.Revision {
+			t.Fatalf("reload = %d %s (running before: %s)", code, body, before)
+		}
+		applied := res.Revision
+		good, err := os.ReadFile(g.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// an invalid one is refused, and the revision stays
+		rewrite(func(cfg map[string]any) { cfg["models"] = "not a list" })
+		if code, body := adminCall("POST", "/admin/v1/config/reload", adminToken); code != 422 || !strings.Contains(body, "invalid_configuration") {
+			t.Fatalf("invalid reload = %d %s", code, body)
+		}
+		if running() != applied {
+			t.Error("a refused configuration replaced the running one")
+		}
+
+		// back to the good file, reloaded by signal
+		if err := os.WriteFile(g.cfg, good, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+			t.Fatal(err)
+		}
+		type change struct {
+			EventID    string          `json:"event_id"`
+			Actor      string          `json:"actor"`
+			Action     string          `json:"action"`
+			Target     string          `json:"target"`
+			Outcome    string          `json:"outcome"`
+			RemoteAddr string          `json:"remote_addr"`
+			Detail     json.RawMessage `json:"detail"`
+		}
+		var changes []change
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			code, body := adminCall("GET", "/admin/v1/changes", adminToken)
+			var page struct{ Changes []change }
+			if err := json.Unmarshal([]byte(body), &page); err != nil || code != 200 {
+				t.Fatalf("GET /admin/v1/changes: %d %s", code, body)
+			}
+			if changes = page.Changes; len(changes) >= 3 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the signal reload was never recorded: %s\n%s", body, g.logs())
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		// newest first: the signal, the refusal, the API reload
+		sig, refused, api := changes[0], changes[1], changes[2]
+		if sig.Actor != "sighup" || sig.Outcome != "applied" || sig.Action != "config.reload" || sig.Target != applied {
+			t.Errorf("signal reload = %+v", sig)
+		}
+		if refused.Actor != "e2e-admin" || refused.Outcome != "rejected" || !strings.Contains(string(refused.Detail), "invalid_configuration") {
+			t.Errorf("refused reload = %+v", refused)
+		}
+		if api.Actor != "e2e-admin" || api.Outcome != "applied" || api.Target != applied || api.RemoteAddr != "127.0.0.1" ||
+			!strings.Contains(string(api.Detail), before) {
+			t.Errorf("API reload = %+v", api)
+		}
+
+		// the chain takes them in, like the decision records
+		ids := []string{sig.EventID, refused.EventID, api.EventID}
+		deadline = time.Now().Add(15 * time.Second)
+		for {
+			n := query[int](t, pool, `SELECT count(*) FROM audit_chain WHERE event_id = ANY($1)`, ids)
+			if n == len(ids) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d of the %d admin changes are in the chain", n, len(ids))
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+
 	// 5. The auditor opens the audit trail and verifies that it has not been
 	//    tampered with.
 	var seals string
@@ -585,7 +737,7 @@ func TestFinanceDemo(t *testing.T) {
 	// The IBAN is nowhere: not in a record, a log or a metric.
 	t.Run("the IBAN was never written down", func(t *testing.T) {
 		all := strings.ToUpper(everythingRecorded(t, pool, g))
-		for _, needle := range []string{iban, ibanCompact, "2004 1010", "20041010", "3M02"} {
+		for _, needle := range []string{iban, ibanCompact, "2004 1010", "20041010", "3M02", adminToken, adminHash} {
 			if strings.Contains(all, strings.ToUpper(needle)) {
 				t.Errorf("found %q in what the gateway recorded, logged or exposed", needle)
 			}

@@ -1,0 +1,7 @@
+# Mutants for the chaining of admin changes in internal/chain, see scripts/mutate.sh (needs TAVIAN_TEST_DATABASE_URL).
+# file	old	new
+internal/chain/sealer.go	var chained = []string{KindDecision, KindAdminChange}	var chained = []string{KindDecision}
+internal/chain/verify.go	slices.Contains(chained, *kind)	slices.Contains([]string{KindDecision}, *kind)
+internal/chain/verify.go	o.kind = ANY($2::text[]) AND (o.xid	o.kind = $2 AND (o.xid
+internal/chain/verify.go	ConsumerName, chained, maxProblems)	ConsumerName, KindDecision, maxProblems)
+internal/chain/verify.go	ConsumerName, chained).Scan(&n)	ConsumerName, KindDecision).Scan(&n)

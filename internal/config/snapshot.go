@@ -49,6 +49,9 @@ type Snapshot struct {
 	ModelNames []string
 	// Keys indexes API keys by the hex SHA-256 of the key.
 	Keys map[string]*APIKey
+	// AdminTokens indexes the administration API's tokens by the hex SHA-256
+	// of the token. Empty: the API is not served.
+	AdminTokens map[string]*AdminToken
 	// Endpoints is the egress allow-list: "host:port" -> destination class.
 	Endpoints map[string]DestinationClass
 }
@@ -136,6 +139,7 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		Backends:    map[string]*Backend{},
 		Models:      map[string]*Model{},
 		Keys:        map[string]*APIKey{},
+		AdminTokens: map[string]*AdminToken{},
 		Endpoints:   map[string]DestinationClass{},
 	}
 
@@ -314,6 +318,39 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 			addf("%s: unknown max_classification %q", where, k.MaxClassification)
 		}
 		s.Keys[h] = &k
+	}
+
+	adminIDs := map[string]bool{}
+	for i := range cfg.Admin.Tokens {
+		t := cfg.Admin.Tokens[i]
+		where := fmt.Sprintf("admin.tokens[%d]", i)
+		if !idPattern.MatchString(t.ID) {
+			addf("%s: id %q must match %s", where, t.ID, idPattern)
+			continue
+		}
+		where = fmt.Sprintf("admin token %q", t.ID)
+		if adminIDs[t.ID] {
+			addf("%s: duplicate id", where)
+			continue
+		}
+		adminIDs[t.ID] = true
+		h, ok := strings.CutPrefix(strings.ToLower(t.Hash), "sha256:")
+		if !ok || len(h) != 64 {
+			addf("%s: hash must be \"sha256:\" followed by 64 hex characters (use `tavian keygen -admin`)", where)
+			continue
+		}
+		if _, err := hex.DecodeString(h); err != nil {
+			addf("%s: hash is not valid hex", where)
+			continue
+		}
+		if _, dup := s.AdminTokens[h]; dup {
+			addf("%s: duplicate hash", where)
+			continue
+		}
+		s.AdminTokens[h] = &t
+	}
+	if len(cfg.Admin.Tokens) > 0 && cfg.Database.URLEnv == "" {
+		addf("admin.tokens: the administration API records every change in the database (database.url_env)")
 	}
 
 	if len(errs) > 0 {

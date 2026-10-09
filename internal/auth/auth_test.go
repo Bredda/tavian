@@ -131,3 +131,54 @@ func TestKeyWithoutExpiryNeverExpires(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestAdminTokensAreGeneratedWithTheirOwnPrefix(t *testing.T) {
+	token, hash, err := GenerateAdminToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(token, "tavadm_") || strings.HasPrefix(token, KeyPrefix) || hash != "sha256:"+HashKey(token) {
+		t.Errorf("token %q hash %q", token, hash)
+	}
+	other, _, _ := GenerateAdminToken()
+	if other == token {
+		t.Error("two tokens are the same")
+	}
+	key, _, _ := GenerateKey()
+	if !strings.HasPrefix(key, KeyPrefix) || strings.HasPrefix(key, AdminTokenPrefix) {
+		t.Errorf("an API key looks like an admin token: %q", key)
+	}
+}
+
+func TestAdminAuthenticator(t *testing.T) {
+	token, _, _ := GenerateAdminToken()
+	key, _, _ := GenerateKey()
+	h := &config.Holder{}
+	a := AdminAuthenticator{Snap: h}
+	if _, err := a.Authenticate(req("Bearer " + token)); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("without a snapshot: %v", err)
+	}
+	h.Store(&config.Snapshot{
+		AdminTokens: map[string]*config.AdminToken{HashKey(token): {ID: "ops-alice"}},
+		Keys:        map[string]*config.APIKey{HashKey(key): {ID: "app"}},
+	})
+	who, err := a.Authenticate(req("Bearer " + token))
+	if err != nil || who.TokenID != "ops-alice" {
+		t.Fatalf("a valid token: %+v %v", who, err)
+	}
+	for name, authz := range map[string]string{
+		"nothing":    "",
+		"basic":      "Basic " + token,
+		"unknown":    "Bearer tavadm_nope",
+		"an API key": "Bearer " + key,
+		"the hash":   "Bearer " + HashKey(token),
+	} {
+		if _, err := a.Authenticate(req(authz)); !errors.Is(err, ErrUnauthenticated) {
+			t.Errorf("%s: err = %v, want unauthenticated", name, err)
+		}
+	}
+	// and the data plane does not take the admin token
+	if _, err := (APIKeyAuthenticator{Snap: h}).Authenticate(req("Bearer " + token)); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("the data plane accepted an admin token: %v", err)
+	}
+}
