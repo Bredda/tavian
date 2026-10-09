@@ -1,0 +1,34 @@
+name: Decision or open question
+description: A choice to make before building (design, security, scope)
+labels: [decision]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Decisions are made here, in the open, before the code. When it is settled, the outcome is recorded as an ADR (docs/adr) and this issue is closed with a link to it.
+  - type: textarea
+    id: question
+    attributes:
+      label: The question
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options considered
+      description: Each with what it costs and what it gives up. Say which security properties each one keeps.
+    validations:
+      required: false
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+    validations:
+      required: false
+  - type: textarea
+    id: needed
+    attributes:
+      label: Needed before
+      description: The work this blocks, if any.
+    validations:
+      required: false

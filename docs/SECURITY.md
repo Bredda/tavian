@@ -198,4 +198,4 @@ Status on main after v0.1.0. Items are meant to become tests.
 - [x] CI check that outbound connections only originate from the egress guard (`forbidigo` rule; PostgreSQL goes through the guard too)
 - [ ] Fuzzing for the request parser and detectors. *Done for the content extractor and the detectors (`make fuzz`, seed corpora run in `go test`); the SSE, JWT and configuration parsers and scheduled runs: M3*
 - [x] Dependency updates (Dependabot for Go modules, Actions, Docker, and the conformance suite's SDK pins)
-- [ ] SBOM, signed releases. *Release archives carry checksums today; signing and SBOM are v1.0 (see [OPEN_QUESTIONS](OPEN_QUESTIONS.md) 21)*
+- [ ] SBOM, signed releases. *Release archives carry checksums today; signing and SBOM are v1.0, see [#68](https://github.com/Bredda/tavian/issues/68) and [#91](https://github.com/Bredda/tavian/issues/91))*

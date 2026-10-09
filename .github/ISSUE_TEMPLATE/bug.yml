@@ -1,0 +1,43 @@
+name: Bug
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security problem (a way around a policy, a leak, tampering with the audit trail), **do not open an issue**: use private vulnerability reporting (Security tab).
+        Never paste prompts, completions, API keys or credentials. A request id or a decision id is enough to find a request.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `tavian version`, or the image tag.
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: Link the documentation if it says so.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Configuration (with secrets removed) and the shortest sequence of requests. The mock backend (`cmd/mockllm`) is enough most of the time.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, metrics, decision record
+      description: Gateway logs carry no content. A decision record (`outbox`, kind `decision`) shows why a request was answered the way it was.
+    validations:
+      required: false

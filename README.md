@@ -106,7 +106,7 @@ Not yet: response inspection, an admin API and UI, model health checks and failo
 | [docs/POLICY.md](docs/POLICY.md) | Policy model, evaluation semantics, examples, lifecycle |
 | [docs/AUDIT.md](docs/AUDIT.md) | The tamper-evident audit chain: guarantees, setup, verification |
 | [docs/QUOTAS_AND_METERING.md](docs/QUOTAS_AND_METERING.md) | Quotas (reserve/settle), multi-dimensional metering incl. energy and carbon |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Scenario-driven milestones |
-| [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) | Decisions still to make, research still to do |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | What each milestone is for; the work itself is in [issues and milestones](https://github.com/Bredda/tavian/milestones) |
+| [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) | Settled and provisional answers; open questions are [`decision` issues](https://github.com/Bredda/tavian/issues?q=is%3Aissue+label%3Adecision+is%3Aopen) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, trunk-based workflow, commit conventions, releases |
 | [docs/adr/](docs/adr/README.md) | Architecture Decision Records |

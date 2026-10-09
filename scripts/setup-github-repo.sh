@@ -30,7 +30,7 @@ gh api -X PUT "repos/${repo}/branches/main/protection" --input - >/dev/null <<'J
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["pr-title", "lint", "test", "build", "docker", "workflows", "conformance"]
+    "contexts": ["pr-title", "lint", "test", "build", "docker", "workflows", "conformance", "demo"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": { "required_approving_review_count": 0 },
@@ -45,6 +45,28 @@ JSON
 echo ">> security features"
 gh api -X PUT "repos/${repo}/vulnerability-alerts" >/dev/null
 gh api -X PUT "repos/${repo}/private-vulnerability-reporting" >/dev/null
+
+echo ">> labels and milestones (see CONTRIBUTING.md, \"How work is tracked\")"
+label() { gh label create "$1" --color "$2" --description "$3" -R "${repo}" --force >/dev/null; }
+label epic 3E4B9E "A group of related issues"
+label decision D4A017 "A question to settle (record the outcome in an ADR)"
+label chore C5DEF5 "Maintenance, tooling, debt"
+label area:api 0E8A16 "API surface and admin"
+label area:audit 0E8A16 "Decision records, chain, seals, retention"
+label area:inspection 0E8A16 "Content inspection and detectors"
+label area:ops 0E8A16 "Operations, deployment, observability"
+label area:policy 0E8A16 "Policy engine"
+label area:quota 0E8A16 "Quotas, metering, cost"
+label area:routing 0E8A16 "Models, backends, routing"
+label area:security 0E8A16 "Security hardening"
+label area:ui 0E8A16 "Admin UI"
+existing="$(gh api "repos/${repo}/milestones?state=all&per_page=100" -q '.[].title')"
+milestone() { grep -qxF "$1" <<<"${existing}" || gh api "repos/${repo}/milestones" -f title="$1" -f description="$2" >/dev/null; }
+milestone "M3 — Operability" "Run it in production: admin API, registry with health and failover, embeddings, observability, multi-replica, chargeback export, TLS. See docs/ROADMAP.md."
+milestone "M4 — Security depth" "Response inspection, ML detectors, content audit with encryption, signed bundles, external anchoring, secret stores, /v1/messages."
+milestone "M5 — Platform" "Admin UI, virtual models, non-LLM models, energy and carbon quotas."
+milestone "v1.0 — Production grade" "HA and Kubernetes, air-gapped bundle, multi-site, policy packs, signed releases."
+milestone "Later" "Not scheduled: decisions pending or waiting for demand."
 
 cat <<'EOF'
 

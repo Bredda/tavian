@@ -1,128 +1,59 @@
 # Roadmap
 
-_Status: draft v0.1_
+_Status: draft v0.2_
 
 Milestones are cut by **scenario** (a thing that demonstrably works), not by technical layer. Each ends with a demo. The north star is the finance scenario in [VISION.md](VISION.md#the-demo-that-defines-success).
 
 Security-relevant foundations (config snapshots, decision records, the multi-dimensional usage event, the polymorphic Model target) are laid early even when their features come later, because they are expensive to retrofit.
 
-## M0 — Foundations
+**This page says what each milestone is for. What is left to do, what is in progress and what has been decided lives on GitHub**, so that there is one place to look:
 
-- [x] Licence chosen (Apache-2.0), project renamed to Tavian
-- [x] Repo skeleton, CI, trunk-based workflow and release-please ([ADR-0013](adr/0013-trunk-based-development-and-release-please.md))
-- [x] First ADRs accepted; blocking [open questions](OPEN_QUESTIONS.md) resolved except the pre-publication name checks
-- [x] Create the GitHub repository and run `scripts/setup-github-repo.sh`
-- [ ] Short competitive analysis (what exists, where the gap really is)
+- [Issues and milestones](https://github.com/Bredda/tavian/milestones): one milestone per milestone below, main issues (`epic`) with their sub-issues, `decision` issues for open questions.
+- [Project board](https://github.com/users/Bredda/projects/7): status, priority and size.
+- [Releases](https://github.com/Bredda/tavian/releases) and the [changelog](../CHANGELOG.md): what shipped.
+- [Architecture decision records](adr/README.md): what was decided and why.
 
-## M1 — Walking skeleton
+## Delivered
 
-> *A developer points the OpenAI SDK at Tavian and talks to a local vLLM, authenticated, with usage recorded.*
+### M0 — Foundations
 
-- OIDC (generic) + API keys → Identity Context
-- `POST /v1/chat/completions` (streaming) and `GET /v1/models`
-- One backend type: OpenAI-compatible (covers vLLM)
-- PostgreSQL schema + migrations; config loaded into an immutable snapshot
-- Usage event with the full multi-dimensional shape (energy/carbon fields present, possibly null)
-- Structured content-free logging, `/healthz`, `/metrics`
-- Compose file: gateway + PostgreSQL + Keycloak (reference) + vLLM stub
+Licence (Apache-2.0), the name Tavian, repository skeleton, CI, trunk-based development and release-please ([ADR-0013](adr/0013-trunk-based-development-and-release-please.md)), the first ADRs.
 
-Progress (skeleton merged = ✓):
+### M1 — Walking skeleton (v0.1.0)
 
-- [x] Strict config → immutable snapshot, SIGHUP reload keeping the last good revision
-- [x] API-key authentication, per-key model allow-list, `tavian keygen`
-- [x] `POST /v1/chat/completions` (streaming relayed, usage extracted and forced on streams), `GET /v1/models` (filtered per key)
-- [x] OpenAI-compatible backend adapter; client credentials never forwarded upstream
-- [x] Egress guard with deployment profiles
-- [x] Multi-dimensional `UsageEvent` (money/energy/carbon null for now), emitted to a log sink
-- [x] Content-free structured logs, `/healthz`, `/readyz`, `/metrics`
-- [x] Compose demo on an Internet-less network (gateway + mock backend)
-- [x] PostgreSQL: embedded migrations (`tavian migrate`), usage events via transactional outbox ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)) with a bounded disk spool and fail-closed admission, every config revision persisted
-- [x] Outbox consumers (rollups) and retention: hourly usage sums and pruning of old events *(done in M2 step 2.6b; the chargeback export stays in M3)*
-- [x] Generic OIDC bearer validation (JWKS cache with max staleness, group → team/model mappings) behind the `Authenticator` interface
-- [x] PostgreSQL in the compose stack
-- [x] Keycloak in the compose stack (realm `tavian`, users alice and bob)
-- [x] Conformance tests against the OpenAI SDKs (non-streaming, streaming, tool calls): `conformance/`, Python and Node, in CI
+*A developer points the OpenAI SDK at Tavian and talks to a local vLLM, authenticated, with usage recorded.* Identity (API keys and generic OIDC), the OpenAI-compatible API with streaming, an immutable configuration snapshot with `SIGHUP` reload, the egress guard and deployment profiles, PostgreSQL with a transactional outbox and a disk spool, content-free logs and metrics, SDK conformance tests, and a compose demo on a network without Internet.
 
-_M1 shipped as v0.1.0._
+A short hardening pass followed: PostgreSQL connections through the egress guard, an in-flight request cap, API key expiry and per-key clearances ([API_KEYS.md](API_KEYS.md)).
 
-## Before M2 — hardening pass
+### M2 — The finance demo, "prove it" (v0.2.0)
 
-Gaps found when comparing [SECURITY.md](SECURITY.md) with the code, closed first because M2 builds on them:
+*The scenario from VISION.md, end to end*, now a test that runs on every change (`e2e/`, `scripts/demo-e2e.sh`). It delivered:
 
-- [x] PostgreSQL connections go through the egress guard; a lint rule forbids other direct dialing
-- [x] In-flight request cap (`limits.max_inflight`)
-- [x] API key lifecycle: `expires_at`, per-key and per-mapping `max_classification` (needed by classification in M2), rotation procedure ([API_KEYS.md](API_KEYS.md))
+- content inspection (PII, secrets, your own dictionaries; fail closed) and classification of every request against the caller's clearance ([INSPECTION.md](INSPECTION.md));
+- routing by constraints (backend destination class and maximum classification), asserted again before the call;
+- the policy engine (YAML + CEL, narrowing scopes, actions on findings, shadow mode, `tavian policy test`) ([POLICY.md](POLICY.md));
+- quotas (requests, concurrency, tokens, monthly budget) reserved and settled in memory ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md));
+- prices, energy and carbon estimates in the usage events and decision records;
+- decision records for every authenticated request, a hash chain with signed seals, `tavian verify-audit`, outbox retention and hourly usage sums ([AUDIT.md](AUDIT.md)).
 
-## M2 — The finance demo ("prove it")
+## Next
 
-> *The scenario from VISION.md, end to end.*
+### M3 — Operability
 
-- Model catalog, Backends with destination class + max classification, two backends (internal + a mock "external")
-- Teams and applications (from API keys and OIDC group mappings); roles come with the admin API in M3
-- Policy engine: YAML + CEL, default deny, narrowing-only, two-phase evaluation, decision records
-- L0 + L1 inspection: PII (IBAN, cards, NIR, email, phone), secrets, custom dictionaries; classification; actions `block/redact/flag/restrict_destinations`
-- Egress guard and the three deployment profiles
-- Quotas: rpm, concurrency, tpm, tokens/day, budget (with prices, 2.7) — reserve/settle, in-memory
-- Audit: decision records, content level `hash` (policy setting: later), hash chain + signed seals + `tavian verify-audit`
-- Energy/carbon computed from configured profiles, cost from configured prices
-- `tavian policy test` and `shadow` mode
+*Run it in production.* An admin API and CLI (configuration as code, database-backed API keys, a read-only auditor role); a model registry with health checks, routing strategies and failover that never widens a constraint; `POST /v1/embeddings`; OpenTelemetry traces, dashboards and alerts; several replicas (shared quota counters, snapshot distribution); a chargeback export; native TLS and mTLS; scheduled fuzzing; operator runbooks.
 
-Progress:
+### M4 — Security depth
 
-- [x] Inspection framework: serializable detector interface, time-boxed engine that fails closed, keyed fingerprints, findings that never hold the matched text, summary in the usage event, metrics ([INSPECTION.md](INSPECTION.md))
-- [x] L0 detectors (e-mail, IBAN, payment card, NIR, phone, IPv4, token-shaped secrets, credential assignments) and L1 custom dictionaries and patterns
-- [x] Canary test that no content reaches logs, metrics, events or error bodies; fuzz targets for the extractor and detectors; latency benchmark
-- [x] Decision records for every authenticated request (refusals included), `decision_id` in the error body and `X-Tavian-Decision-Id`, stable reason codes, kind-aware outbox and spool ([SECURITY.md](SECURITY.md#audit))
-- [x] Classification: label from declared header, default and inferred findings, enforced against the caller's clearance, recorded in decision records, usage events and a metric
-- [x] Routing by constraints (backend `max_classification` and destination class per label), candidates in the decision record, phase B assertion, named mock backends and an approved-external mock in the demo stack
-- [x] Policy engine, part 1: YAML policies in `policy.dir` with CEL conditions, scopes (organization, team, application), narrowing-only models/destinations/default label/label rules, built-in baseline in the same format, policies stored with each revision
-- [x] Policy engine, part 2: actions on findings (`block`, `redact` with verification, `restrict_destinations`, `flag`), `label` in action conditions
-- [x] Policy engine, part 3: shadow mode (recorded in decision records and a metric), `tavian policy test` running the gateway's own decision code, example fixtures, policies in the demo stack
-- [x] Quotas: `rpm`, `concurrency`, `tpm`, `tokens_per_day` set in policies, reserve/settle in memory, 429 with `Retry-After`, recorded in decision records (coalesced), soft and shadow modes. Budget in € arrives with prices (2.7); the day's token count is rebuilt from the hourly usage sums after a restart; shared counters: M3 ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#in-main))
-- [x] Outbox worker framework (consumer cursors, one instance per consumer, rows read in transaction order), hash chain over decision records, signed seals, `tavian audit-keygen` and `tavian verify-audit` ([AUDIT.md](AUDIT.md))
-- [x] Outbox retention (rows older than their retention and read by every consumer; decision records only under a signed seal; chain and seals kept; every removal logged for `verify-audit`) and a minimal hourly usage rollup that also rebuilds the daily token counters, closing the M1 item on consumers and retention ([AUDIT.md](AUDIT.md#retention))
-- [x] Prices, energy profiles and carbon intensities in the configuration; cost, energy and carbon in usage events (with the figures they were computed from), decision records (chained), hourly sums and metrics; the `budget_eur` quota (monthly, UTC) reserved at the chosen backend's price ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#cost-energy-and-carbon-in-main))
-- [x] End-to-end finance demo test in CI: the scenario of [VISION.md](VISION.md) against the real binaries and PostgreSQL (`e2e/`, in the test job) and against the docker compose stack as shipped (`scripts/demo-e2e.sh`, the `demo` job)
+Response inspection (`observe`, then `enforce` with a hold-back window); local ML detectors and prompt-injection signals; content audit levels with envelope encryption and crypto-shredding; signed policy bundles and two-person approval; external anchoring of audit seals and keys in a KMS; secret store integrations; an Anthropic-compatible `/v1/messages`.
 
-_M2 ships as v0.2.0._
+### M5 — Platform
 
-## M3 — Operability
+An admin UI (policies, usage, audit explorer, "why was this refused?"); virtual models (pipelines on a single request); non-LLM model types; energy and carbon quotas and measured energy profiles.
 
-- Admin API + CLI (config as code); read-only auditor role
-- Model registry with health checks, multi-backend routing strategies, failover (within constraints)
-- `POST /v1/embeddings`
-- OpenTelemetry traces (one span per stage), Prometheus metrics, reference Grafana dashboards
-- Multi-replica support: Redis shared counters, snapshot distribution
-- Chargeback export (CSV/JSON) from the hourly usage sums
-- Native TLS on both listeners; mTLS to PostgreSQL and internal backends
-- Database-backed API keys with last-use tracking and a revocation list (with the admin API)
-- Fuzzing of the request, SSE, JWT and configuration parsers in scheduled CI
+### v1.0 — Production grade
 
-## M4 — Security depth
+High availability and Kubernetes manifests, an air-gapped installation bundle, multi-site, enterprise policy packs, signed releases with an SBOM, a security review.
 
-- Response inspection (`observe` → `enforce` with hold-back window)
-- L2 local ML detectors (NER, classifier), prompt-injection signals
-- Content audit levels `redacted` / `full` with envelope encryption and crypto-shredding
-- Signed policy / ruleset bundles for offline distribution; two-person approval for guardrails
-- External anchoring of audit seals
-- Secret store integrations (Vault, Kubernetes Secrets)
-- Anthropic-compatible `/v1/messages`
+### Later, maybe
 
-## M5 — Platform
-
-- Admin UI (policies, usage, audit explorer, "why was this refused?")
-- Virtual models: pre/post-processing pipelines and middlewares
-- Non-LLM model types: rerankers and other small models
-- Energy/carbon quotas and reports, measured energy profiles from local GPU telemetry
-
-## v1.0 — Production grade
-
-- HA (multi-replica gateway, PostgreSQL HA), Kubernetes manifests / Helm chart
-- Air-gapped installation bundle (images, models, rulesets, docs) with verification
-- Multi-cluster / multi-site with replicated config, disaster-recovery runbooks
-- Enterprise policy packs (e.g. GDPR / AI Act / sector-specific starting points)
-- Security review, fuzzing, SBOM, signed releases, documented hardening
-
-## Explicitly later / maybe
-
-`POST /v1/responses` · multi-tenancy · multimodal inspection · reversible pseudonymization · response caching with isolation guarantees
+`POST /v1/responses` · multi-tenancy · multimodal inspection · reversible pseudonymization · response caching with isolation guarantees. Each is waiting for a decision or for demand, see the `Later` milestone.

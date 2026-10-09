@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Bredda/tavian/security/advisories/new
+    about: Do not open a public issue for a vulnerability. Use private vulnerability reporting.
+  - name: Read the docs first
+    url: https://github.com/Bredda/tavian/tree/main/docs
+    about: Vision, architecture, security model, policy language and the audit chain.
