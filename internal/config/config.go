@@ -97,10 +97,12 @@ type Config struct {
 	Inspection inspect.Config `yaml:"inspection"`
 	// Policy says where the policy files are (docs/POLICY.md). Without it only
 	// the built-in baseline policy applies.
-	Policy   PolicyConfig `yaml:"policy"`
-	Backends []Backend    `yaml:"backends"`
-	Models   []Model      `yaml:"models"`
-	APIKeys  []APIKey     `yaml:"api_keys"`
+	Policy PolicyConfig `yaml:"policy"`
+	// Quota tunes how quotas (set in policies) reserve tokens.
+	Quota    QuotaConfig `yaml:"quota"`
+	Backends []Backend   `yaml:"backends"`
+	Models   []Model     `yaml:"models"`
+	APIKeys  []APIKey    `yaml:"api_keys"`
 
 	// PolicySources are the policy files read from Policy.Dir by Load. They are
 	// part of the configuration revision.
@@ -113,6 +115,17 @@ type PolicyConfig struct {
 	// relative path is relative to the configuration file. Reloadable.
 	Dir string `yaml:"dir"`
 }
+
+// QuotaConfig holds the settings of token reservation. Reloadable.
+type QuotaConfig struct {
+	// DefaultOutputTokens is what a request that sets no max_tokens is assumed
+	// to need for its answer when tokens are reserved (default 1024). What the
+	// answer really holds is counted when the request ends, even above it.
+	DefaultOutputTokens int64 `yaml:"default_output_tokens"`
+}
+
+// MaxDefaultOutputTokens bounds quota.default_output_tokens.
+const MaxDefaultOutputTokens = 1 << 20
 
 type ListenConfig struct {
 	// Data is the data-plane listener (OpenAI-compatible API).
@@ -361,6 +374,9 @@ func (c *Config) applyDefaults() {
 		c.Limits.ShutdownGrace = 30 * time.Second
 	}
 	c.Inspection.ApplyDefaults()
+	if c.Quota.DefaultOutputTokens == 0 {
+		c.Quota.DefaultOutputTokens = 1024
+	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}

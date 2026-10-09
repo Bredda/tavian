@@ -372,6 +372,33 @@ func TestMaxInflight(t *testing.T) {
 	}
 }
 
+func TestQuotaDefaults(t *testing.T) {
+	cfg, err := Parse([]byte("profile: air-gapped\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Compile(cfg, nil, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Quota.DefaultOutputTokens != 1024 {
+		t.Errorf("default_output_tokens = %d, want 1024", snap.Quota.DefaultOutputTokens)
+	}
+	set, _ := Parse([]byte("profile: air-gapped\nquota: {default_output_tokens: 300}\n"))
+	if snap, err := Compile(set, nil, func(string) string { return "" }); err != nil || snap.Quota.DefaultOutputTokens != 300 {
+		t.Errorf("explicit value: %v %+v", err, snap)
+	}
+	for _, bad := range []string{"-1", "2000000"} {
+		cfg, _ := Parse([]byte("profile: air-gapped\nquota: {default_output_tokens: " + bad + "}\n"))
+		if _, err := Compile(cfg, nil, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), "default_output_tokens") {
+			t.Errorf("%s accepted: %v", bad, err)
+		}
+	}
+	if _, err := Parse([]byte("profile: air-gapped\nquota: {default_output: 1}\n")); err == nil {
+		t.Error("a typo in quota was accepted")
+	}
+}
+
 func compileKeys(t *testing.T, keysYAML string) (*Snapshot, error) {
 	t.Helper()
 	y := "profile: air-gapped\napi_keys:\n" + keysYAML
@@ -648,13 +675,13 @@ func TestRevisionWithoutPoliciesIsTheHashOfTheFile(t *testing.T) {
 
 func TestInvalidPoliciesRejectTheConfiguration(t *testing.T) {
 	path := writeConfigWithPolicies(t, map[string]string{
-		"bad.yaml": "apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: bad }\nspec: { scope: { organization: true }, quotas: [] }\n",
+		"bad.yaml": "apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: bad }\nspec: { scope: { organization: true }, audit: { content: hash } }\n",
 	})
 	cfg, raw, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Compile(cfg, raw, env(map[string]string{"AZURE_KEY": "k"})); err == nil || !strings.Contains(err.Error(), "bad.yaml") || !strings.Contains(err.Error(), "quotas") {
+	if _, err := Compile(cfg, raw, env(map[string]string{"AZURE_KEY": "k"})); err == nil || !strings.Contains(err.Error(), "bad.yaml") || !strings.Contains(err.Error(), "audit") {
 		t.Errorf("err = %v", err)
 	}
 	if _, _, err := Load(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {

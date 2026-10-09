@@ -36,6 +36,8 @@ type Snapshot struct {
 	// built-in baseline). PolicySources are the files it was built from.
 	Policy        *policy.Engine
 	PolicySources []policy.Source
+	// Quota says how tokens are reserved against the quotas the policies set.
+	Quota QuotaConfig
 
 	Backends map[string]*Backend
 	Models   map[string]*Model
@@ -88,12 +90,16 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 	if cfg.Limits.MaxInflight < 1 {
 		addf("limits.max_inflight: must be at least 1")
 	}
+	if n := cfg.Quota.DefaultOutputTokens; n < 1 || n > MaxDefaultOutputTokens {
+		addf("quota.default_output_tokens: must be between 1 and %d", MaxDefaultOutputTokens)
+	}
 
 	s := &Snapshot{
 		Revision:    revisionOf(raw, cfg.PolicySources),
 		LoadedAt:    time.Now().UTC(),
 		Profile:     cfg.Profile,
 		Limits:      cfg.Limits,
+		Quota:       cfg.Quota,
 		DocsEnabled: cfg.Docs.Enabled == nil || *cfg.Docs.Enabled,
 		Backends:    map[string]*Backend{},
 		Models:      map[string]*Model{},

@@ -59,6 +59,34 @@ type Shadow struct {
 	Error       string    `json:"error,omitempty"`
 }
 
+// Quota says what the quotas did to a request.
+type Quota struct {
+	// ReservedTokens is what was set aside before the backend was called, in
+	// the same unit as the limits (input estimate plus the answer's cap).
+	ReservedTokens int64 `json:"reserved_tokens,omitempty"`
+	// Exceeded lists the limits the request went over, whatever their effect.
+	Exceeded []QuotaCheck `json:"exceeded,omitempty"`
+	// Suppressed counts refusals of the same caller and limit, in the second
+	// before this record, that were not recorded one by one.
+	Suppressed int64 `json:"suppressed,omitempty"`
+}
+
+// QuotaCheck is one limit a request went over.
+type QuotaCheck struct {
+	Policy    string `json:"policy"`
+	Dimension string `json:"dimension"`
+	// Scope is the kind of scope (organization, team, application,
+	// team_application), never the name of someone else's team.
+	Scope string `json:"scope"`
+	Limit int64  `json:"limit"`
+	Used  int64  `json:"used"`
+	// Requested is what the request asked for (1 request, or tokens).
+	Requested int64 `json:"requested"`
+	// Effect is refused, soft (counted, not refused) or shadow (from a policy
+	// in shadow mode).
+	Effect string `json:"effect"`
+}
+
 // DecisionRecord is written once for every authenticated chat request, refused
 // ones included. Requests refused before the caller is known (bad
 // credentials, overload) leave metrics and logs only: recording them would let
@@ -99,6 +127,9 @@ type DecisionRecord struct {
 	Redactions map[string]int `json:"redactions,omitempty"`
 	// Shadow is what policies in shadow mode would have changed.
 	Shadow *Shadow `json:"shadow,omitempty"`
+	// Quota is set when quotas reserved tokens for the request or it went over
+	// a limit.
+	Quota *Quota `json:"quota,omitempty"`
 
 	Outcome    string `json:"outcome"`
 	ReasonCode string `json:"reason_code"`

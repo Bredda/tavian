@@ -16,6 +16,7 @@ _Status: living document. Items marked **[blocking]** should be settled before M
 7. **Multi-tenancy.** One organization per deployment now. Do we need hard tenant isolation later (shared infra, separate data and keys)? If yes, tenant id must be threaded through the model early.
 8. **Snapshot distribution** for multi-replica: PostgreSQL `LISTEN/NOTIFY` + polling vs a pull endpoint. Prefer the simplest that tolerates partitions.
 9. **Quota store failure.** Confirm fail-closed default vs degraded local limits as the documented default.
+9b. **Quota counters across restarts and replicas.** *Provisional, 2026-10:* counters are in memory, per instance, and start from zero when the process restarts; the day's `tokens_per_day` is to be rehydrated from the hourly usage rollups (M2 step 2.6b). A day is a UTC day: should the boundary be configurable per organization (time zone)?
 10. **Tokenizers.** Which tokenizers to embed for input estimation across model families, and how to stay conservative for unknown ones.
 
 ## Security

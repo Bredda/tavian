@@ -69,7 +69,8 @@ Usage events and audit records are written to an **outbox table in PostgreSQL** 
  1  receive          assign request_id / trace_id, size and header limits
  2  authenticate     JWT (OIDC) or API key → Identity Context (user, groups, team, app)
  3  admission        cheap checks first → protects the expensive steps below
-                    (today: in-flight cap `limits.max_inflight`; M2: RPM, concurrency per scope)
+                    (in-flight cap `limits.max_inflight`; rpm and concurrency per scope, taken
+                    before the body is read; built)
  4  authorize        RBAC: may this principal call this API and this model alias?
  5  normalize        parse into an internal request representation (messages, tools, params)
  6  inspect (req)    detectors → findings; then the classification label (built)
@@ -81,10 +82,10 @@ Usage events and audit records are written to an **outbox table in PostgreSQL** 
                        first allowed target of the route); health, capabilities,
                        context window and strategies: M3
 10  policy (phase B) assertion: chosen backend satisfies constraints (defence in depth, built)
-11  quota reserve    TPM / tokens-per-day / budget reservation using estimated usage
+11  quota reserve    TPM / tokens-per-day reservation using estimated usage (built); budget: 2.7
 12  call provider    through the egress guard (internal backends use the same dialer path)
 13  relay response   stream pass-through; response inspection per policy (see below)
-14  quota settle     replace the reservation with actual usage (refund the difference)
+14  quota settle     replace the reservation with actual usage (refund the difference; built)
 15  emit events      usage event + audit record via outbox (async consumers)
 ```
 
@@ -93,7 +94,7 @@ Notes:
 - **Admission before inspection** (step 3) prevents inspection CPU from becoming a DoS vector.
 - **Quota reservation after routing** (step 11) because cost depends on the chosen backend's price.
 - **Failover never widens constraints.** If the preferred backend fails, only other candidates that already passed the constraint filter are eligible.
-- Steps 4–10 produce a **decision record** (findings, chosen backend, reason code; rules matched and constraints arrive with the policy engine) even for refused requests. It exists from the moment the caller is authenticated: a request refused earlier (bad credentials, overload) leaves metrics and logs only, because recording unauthenticated traffic would let anyone fill the audit trail.
+- Steps 4–10 produce a **decision record** (findings, chosen backend, reason code; rules matched and constraints arrive with the policy engine) even for refused requests. It exists from the moment the caller is authenticated: a request refused earlier (bad credentials, overload) leaves metrics and logs only, because recording unauthenticated traffic would let anyone fill the audit trail. One more exception, for the same reason: quota refusals (429) are recorded at most once a second per caller and limit, with the number of refusals the record stands for; the others are counted in metrics and carry no `decision_id`.
 
 ### Streaming
 
@@ -177,7 +178,7 @@ internal/glob, ids, version  ✓ small utilities
 internal/inspect/          ✓ detectors, findings, fail-closed engine (classification: M2)
 internal/policy/           ✓ YAML + CEL evaluation, baseline policy, scopes, actions on findings, shadow mode
 internal/pipeline/         ✓ the decision steps (model authorization, policy, clearance, routing, phase B) shared by the gateway and `policy test`
-internal/quota/            · admission, reserve/settle, counters (M2)
+internal/quota/            ✓ admission, reserve/settle, in-memory counters, refusal coalescing (shared counters: M3)
 internal/audit/            ✓ decision records and reason codes (hash chain: M2; encryption: M4)
 internal/admin/            · control-plane API (M3)
 internal/store/            ✓ PostgreSQL access (pgx): embedded migrations, outbox, config revisions

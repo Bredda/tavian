@@ -183,8 +183,8 @@ func TestPolicyTestUsageAndConfigErrors(t *testing.T) {
 	if code := run([]string{"policy", "test", "-config", "nope.yaml", "x.yaml"}, &out, &errOut); code != 1 {
 		t.Errorf("missing config: exit %d", code)
 	}
-	dir := workspace(t, map[string]string{"bad.yaml": "apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: b }\nspec: { scope: { organization: true }, quotas: [] }\n"})
-	if code, _, e := runTest(t, dir, fixtureHead+"  - name: a\n    request: { model: shared }\n    expect: { outcome: served }\n"); code != 1 || !strings.Contains(e, "quotas") {
+	dir := workspace(t, map[string]string{"bad.yaml": "apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: b }\nspec: { scope: { organization: true }, audit: { content: hash } }\n"})
+	if code, _, e := runTest(t, dir, fixtureHead+"  - name: a\n    request: { model: shared }\n    expect: { outcome: served }\n"); code != 1 || !strings.Contains(e, "audit") {
 		t.Errorf("invalid policies: exit %d, %q", code, e)
 	}
 }

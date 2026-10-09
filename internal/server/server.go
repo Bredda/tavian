@@ -28,6 +28,7 @@ import (
 	"github.com/bredda/tavian/internal/pipeline"
 	"github.com/bredda/tavian/internal/policy"
 	"github.com/bredda/tavian/internal/provider/openai"
+	"github.com/bredda/tavian/internal/quota"
 	"github.com/bredda/tavian/internal/router"
 	"github.com/bredda/tavian/internal/version"
 )
@@ -43,6 +44,11 @@ type Deps struct {
 	// Route picks the backend of a request; nil means router.Resolve. Tests
 	// replace it to check that phase B catches a faulty router.
 	Route RouteFunc
+	// Quota holds the quota counters and Coalescer limits how often quota
+	// refusals are recorded; nil means new ones. Tests pass their own, with a
+	// clock they control.
+	Quota     *quota.Store
+	Coalescer *quota.Coalescer
 }
 
 // RouteFunc is the signature of router.Resolve.
@@ -58,6 +64,12 @@ func RequestID(ctx context.Context) string {
 
 // NewDataHandler returns the OpenAI-compatible API.
 func NewDataHandler(d Deps) http.Handler {
+	if d.Quota == nil {
+		d.Quota = quota.NewStore(nil)
+	}
+	if d.Coalescer == nil {
+		d.Coalescer = quota.NewCoalescer(nil)
+	}
 	s := &server{Deps: d}
 	d.Metrics.WatchInflight(func() float64 { return float64(s.inflight.Load()) })
 	mux := http.NewServeMux()
@@ -146,6 +158,7 @@ type call struct {
 	redactions map[string]int
 	shadow     *audit.Shadow
 	candidates []router.Candidate
+	quota      *audit.Quota
 }
 
 // record starts the decision record of c.
@@ -174,6 +187,7 @@ func (c *call) record(ctx context.Context, outcome string, reason audit.Reason, 
 	rec.RulesMatched = c.matched
 	rec.Redactions = c.redactions
 	rec.Shadow = c.shadow
+	rec.Quota = c.quota
 	if c.decision != nil {
 		rec.Label = string(c.decision.Label)
 		rec.LabelSources = &audit.LabelSources{
@@ -233,6 +247,16 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 
 	c := &call{snap: snap, id: id, decisionID: ids.New(), at: time.Now()}
 	w.Header().Set(decisionHeader, c.decisionID)
+
+	// admission: the cheap quotas (rpm, concurrency), before any work is
+	// spent on the request. A request refused later still counts against rpm.
+	limits := snap.Policy.Limits(policyIdentity(id))
+	slot, admitted := s.Quota.Admit(limits)
+	defer slot.Release()
+	s.noteQuota(c, admitted)
+	if admitted.Refused {
+		return s.refuseQuota(ctx, w, c, admitted)
+	}
 
 	// receive (bounded)
 	r.Body = http.MaxBytesReader(w, r.Body, snap.Limits.MaxRequestBytes)
@@ -333,7 +357,23 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		return s.refuse(ctx, w, c, audit.InvalidRequest, err.Error(), "invalid_request")
 	}
 
-	// TODO(M2): quota reserve (tpm / budget) using the backend's price.
+	// reserve the tokens the request may use against tpm and tokens_per_day;
+	// settled below with what it really used
+	maxOut := peeked.MaxTokens
+	if maxOut <= 0 {
+		maxOut = snap.Quota.DefaultOutputTokens
+	}
+	reservation, reserved := s.Quota.Reserve(limits, quota.Estimate(len(upstreamBody), maxOut))
+	s.noteQuota(c, reserved)
+	if reserved.Refused {
+		return s.refuseQuota(ctx, w, c, reserved)
+	}
+	if reservation != nil {
+		if c.quota == nil {
+			c.quota = &audit.Quota{}
+		}
+		c.quota.ReservedTokens = reservation.Tokens()
+	}
 
 	// call provider and relay the response
 	start := time.Now()
@@ -355,7 +395,21 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) string {
 		outcome, reason = "upstream_error", audit.UpstreamError
 	}
 
-	// TODO(M2): quota settle with actual usage.
+	// settle: what the answer really used replaces the reservation. When the
+	// backend reported nothing, a failure used nothing and a success keeps its
+	// estimate.
+	switch {
+	case res.Usage.Known:
+		used := res.Usage.Input + res.Usage.Output
+		reservation.Settle(used)
+		if t := reservation.Tokens(); t > 0 {
+			s.Metrics.quotaEstimate.Observe(float64(used) / float64(t))
+		}
+	case res.Status/100 != 2:
+		reservation.Settle(0)
+	default:
+		reservation.Settle(reservation.Tokens())
+	}
 	rec := c.record(ctx, audit.OutcomeServed, reason, status)
 	if outcome != "ok" {
 		rec.Outcome = audit.OutcomeFailed

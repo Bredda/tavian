@@ -19,6 +19,7 @@ import (
 
 	"github.com/bredda/tavian/internal/glob"
 	"github.com/bredda/tavian/internal/inspect"
+	"github.com/bredda/tavian/internal/quota"
 	"github.com/bredda/tavian/internal/taxonomy"
 )
 
@@ -60,6 +61,7 @@ type policy struct {
 	defaultLabel taxonomy.Label
 	infer        []inferRule
 	actions      []actionRule
+	quotas       []quota.Limit
 }
 
 type actionRule struct {
@@ -212,7 +214,25 @@ func compilePolicy(inferEnv, actionEnv *cel.Env, d Document, where, source strin
 		}
 		p.actions = append(p.actions, rule)
 	}
+	scope := quota.Scope{Organization: d.Spec.Scope.Organization, Team: d.Spec.Scope.Team, Application: d.Spec.Scope.Application}
+	for _, q := range d.Spec.Quotas {
+		p.quotas = append(p.quotas, quota.Limit{
+			Policy: p.name, Scope: scope, Dimension: q.Dimension, Max: q.Limit,
+			Soft: q.Mode == QuotaSoft, Shadow: p.shadow,
+		})
+	}
 	return p, errs
+}
+
+// Limits lists the quotas that apply to the caller: every policy's, including
+// those in shadow mode (marked as such, so they count and report but never
+// refuse). Every one of them must pass.
+func (e *Engine) Limits(id Identity) []quota.Limit {
+	var out []quota.Limit
+	for _, p := range e.applicable(id, true) {
+		out = append(out, p.quotas...)
+	}
+	return out
 }
 
 // widenings lists the places where a policy names something the baseline does

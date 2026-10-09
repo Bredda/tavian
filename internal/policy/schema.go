@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/bredda/tavian/internal/quota"
 	"github.com/bredda/tavian/internal/taxonomy"
 )
 
@@ -72,10 +73,30 @@ type Spec struct {
 
 	Inspection InspectionSpec `yaml:"inspection"`
 
-	// Not implemented yet: refused with a message naming where they arrive.
-	Quotas yaml.Node `yaml:"quotas"`
-	Audit  yaml.Node `yaml:"audit"`
+	// Quotas limit what the scope may use (docs/QUOTAS_AND_METERING.md).
+	Quotas []QuotaSpec `yaml:"quotas"`
+
+	// Not implemented yet: refused with a message naming where it arrives.
+	Audit yaml.Node `yaml:"audit"`
 }
+
+// QuotaSpec is one limit of a policy.
+type QuotaSpec struct {
+	Dimension quota.Dimension `yaml:"dimension"`
+	Limit     int64           `yaml:"limit"`
+	// Window is optional: each dimension has a fixed one (rpm and tpm one
+	// minute, tokens_per_day one UTC day, concurrency none), and a policy that
+	// names another is refused rather than silently given this one.
+	Window string `yaml:"window"`
+	// Mode is "hard" (default, refuses) or "soft" (counts and reports only).
+	Mode string `yaml:"mode"`
+}
+
+// Quota modes.
+const (
+	QuotaHard = "hard"
+	QuotaSoft = "soft"
+)
 
 // InspectionSpec says what to do with what inspection finds.
 type InspectionSpec struct {
@@ -295,6 +316,35 @@ func (d *Document) validate(where string, baseline bool) []error {
 		}
 	}
 
+	seenDim := map[quota.Dimension]bool{}
+	for i, q := range d.Spec.Quotas {
+		at := fmt.Sprintf("spec.quotas[%d]", i)
+		switch {
+		case q.Dimension == "budget_eur":
+			addf("%s: dimension budget_eur is not supported yet; it arrives with prices (M2 step 2.7)", at)
+		case !q.Dimension.Valid():
+			addf("%s: dimension must be one of rpm, concurrency, tpm, tokens_per_day (got %q)", at, q.Dimension)
+		case seenDim[q.Dimension]:
+			addf("%s: dimension %s is already limited by this policy", at, q.Dimension)
+		}
+		seenDim[q.Dimension] = true
+		if q.Limit < 1 {
+			addf("%s: limit must be at least 1", at)
+		}
+		if q.Window != "" && q.Window != q.Dimension.Window() {
+			if want := q.Dimension.Window(); want == "" {
+				addf("%s: %s has no window", at, q.Dimension)
+			} else {
+				addf("%s: window of %s is %s (got %q)", at, q.Dimension, want, q.Window)
+			}
+		}
+		switch q.Mode {
+		case "", QuotaHard, QuotaSoft:
+		default:
+			addf("%s: mode must be hard or soft (got %q)", at, q.Mode)
+		}
+	}
+
 	for _, ns := range []struct {
 		field string
 		node  yaml.Node
@@ -302,7 +352,6 @@ func (d *Document) validate(where string, baseline bool) []error {
 	}{
 		{"spec.inspection.response", insp.Response, "response inspection (M4)"},
 		{"spec.inspection.request.rulesets", insp.Request.Rulesets, "nothing: detectors are configured under `inspection:` in tavian.yaml"},
-		{"spec.quotas", d.Spec.Quotas, "quotas (M2 step 2.5)"},
 		{"spec.audit", d.Spec.Audit, "the audit trail work (M2 step 2.6 and M4)"},
 	} {
 		if !ns.node.IsZero() {
