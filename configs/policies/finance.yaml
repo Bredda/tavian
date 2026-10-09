@@ -37,3 +37,12 @@ spec:
         - id: cards-stay-home
           when: finding.subtype == "payment_card"
           action: restrict_destinations
+
+  # What the team may use. Every quota of every applicable policy must pass.
+  # rpm and tpm count the last minute, tokens_per_day a UTC day; `mode: soft`
+  # counts and reports in the decision records without refusing.
+  quotas:
+    - { dimension: rpm, limit: 120 }
+    - { dimension: concurrency, limit: 10 }
+    - { dimension: tpm, limit: 200000, mode: soft }
+    - { dimension: tokens_per_day, limit: 5000000 }

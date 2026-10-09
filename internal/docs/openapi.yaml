@@ -160,6 +160,7 @@ paths:
         "403": { $ref: "#/components/responses/ModelNotAllowed" }
         "404": { $ref: "#/components/responses/ModelNotFound" }
         "413": { $ref: "#/components/responses/TooLarge" }
+        "429": { $ref: "#/components/responses/QuotaReached" }
         "502": { $ref: "#/components/responses/UpstreamUnavailable" }
         "503": { $ref: "#/components/responses/Unavailable" }
   /healthz:
@@ -398,6 +399,22 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     TooLarge:
       description: The request body exceeds `limits.max_request_bytes`. Code `request_too_large`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    QuotaReached:
+      description: |
+        A quota set by a policy is reached. The code is `rate_limit_exceeded`
+        for requests per minute, tokens per minute and concurrency (retry after
+        `Retry-After`), and `quota_exceeded` when the day's tokens are spent or
+        when the request alone is larger than the limit (retrying will not
+        help, and there is no `Retry-After`). The message names the limit and
+        the kind of scope. `decision_id` and `X-Tavian-Decision-Id` are
+        present unless this caller's refusals are being recorded less often
+        than they happen (at most one record per second and limit).
+      headers:
+        Retry-After:
+          schema: { type: integer }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

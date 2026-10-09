@@ -82,6 +82,13 @@ log:
 # policy:
 #   dir: policies
 
+# Quotas are set in policies (spec.quotas). This only tunes how tokens are
+# reserved: a request that sets no max_tokens is assumed to need this many
+# tokens for its answer. What the answer really holds is counted when it ends,
+# even above it. Counters are in memory and start from zero on restart.
+# quota:
+#   default_output_tokens: 1024
+
 # API reference (Scalar) at /docs and the OpenAPI description at /openapi.yaml,
 # served on the data port without authentication. Both are embedded in the
 # binary and work offline. They describe the API only. Default: enabled.

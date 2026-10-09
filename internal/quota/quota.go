@@ -13,7 +13,7 @@ const (
 	RPM          Dimension = "rpm"            // requests in the last minute
 	Concurrency  Dimension = "concurrency"    // requests being served
 	TPM          Dimension = "tpm"            // tokens in the last minute
-	TokensPerDay Dimension = "tokens_per_day" // tokens since midnight UTC
+	TokensPerDay Dimension = "tokens_per_day" //nolint:gosec // a quota name, not a credential: tokens since midnight UTC
 )
 
 // Valid reports whether d is a dimension this version enforces.
