@@ -1,0 +1,12 @@
+# Mutants for internal/cost, see scripts/mutate.sh.
+# file	old	new
+internal/cost/cost.go	v < 0 || v > maxPrice	v < 0 || v > maxPrice*2
+internal/cost/cost.go	v < 0 || v > maxPrice	v <= 0 || v > maxPrice
+internal/cost/cost.go	!finite(v) || v < 0 || v > maxWh	v < 0 || v > maxWh
+internal/cost/cost.go	cached := min(max(u.Cached, 0), max(u.Input, 0))	cached := max(u.Cached, 0)
+internal/cost/cost.go	cachedPrice := p.Input	cachedPrice := p.Output
+internal/cost/cost.go	float64(u.Output)/1000*energy.WhPer1KOutput	float64(u.Output)/1000*energy.WhPer1KInput
+internal/cost/cost.go	g := wh / 1000 * *intensity	g := wh * *intensity
+internal/cost/cost.go	energy.Confidence, true	energy.Confidence, false
+internal/cost/cost.go	return int64(math.Round(v))	return int64(v)
+internal/cost/cost.go	PriceMicroEUR(p, Usage{Input: inputTokens, Output: maxOutput})	PriceMicroEUR(p, Usage{Input: inputTokens})

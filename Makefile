@@ -28,6 +28,11 @@ test-db: ## Run the tests including PostgreSQL integration (starts a throwaway c
 	@until docker exec tavian-test-pg pg_isready -U postgres -d tavian >/dev/null 2>&1; do sleep 0.5; done
 	TAVIAN_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/tavian sh -c 'go test -race -count=1 ./... && go test -tags e2e -race -count=1 ./e2e' ; status=$$?; docker rm -f tavian-test-pg >/dev/null; exit $$status
 
+.PHONY: mutate
+mutate: ## Mutation check of a package against its manifest in scripts/mutants (PKG=./internal/cost)
+	@test -n "$(PKG)" || { echo "usage: make mutate PKG=./internal/<package>"; exit 2; }
+	scripts/mutate.sh $(PKG)
+
 .PHONY: policy-test
 policy-test: ## Run the example policy fixtures through the gateway's decision code
 	go run ./cmd/tavian policy test -config configs/policy-tests/tavian.yaml configs/policy-tests/cases
