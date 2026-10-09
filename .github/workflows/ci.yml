@@ -83,6 +83,10 @@ jobs:
     services:
       postgres:
         image: postgres:17-alpine
+        # Empty without the secret (forks): the pull is then anonymous.
+        credentials:
+          username: ${{ secrets.DOCKER_HUB_TOKEN && vars.DOCKER_HUB_USER || '' }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
         env:
           POSTGRES_PASSWORD: test
           POSTGRES_DB: tavian
@@ -158,6 +162,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/docker-hub-login
+        with:
+          username: ${{ vars.DOCKER_HUB_USER }}
+          token: ${{ secrets.DOCKER_HUB_TOKEN }}
       - name: Build images (not pushed)
         run: |
           docker build --build-arg CMD=tavian -t tavian:ci .
@@ -172,6 +180,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/docker-hub-login
+        with:
+          username: ${{ vars.DOCKER_HUB_USER }}
+          token: ${{ secrets.DOCKER_HUB_TOKEN }}
       - name: Demo scenario (docker compose)
         run: scripts/demo-e2e.sh
 
@@ -181,5 +193,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/docker-hub-login
+        with:
+          username: ${{ vars.DOCKER_HUB_USER }}
+          token: ${{ secrets.DOCKER_HUB_TOKEN }}
       - name: actionlint
         run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
