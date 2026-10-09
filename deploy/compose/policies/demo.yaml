@@ -21,6 +21,9 @@ spec:
   # A generous ceiling for the whole demo; lower it to see 429s with Retry-After.
   quotas:
     - { dimension: rpm, limit: 600 }
+    # What the whole demo may spend in a calendar month (UTC). The mock backends
+    # have prices in tavian.yaml, so every request uses a few micro-euros.
+    - { dimension: budget_eur, limit: 100 }
 ---
 # A policy being tried out: it is evaluated for every request but enforces
 # nothing. The decision records say what it WOULD have done (see the README).

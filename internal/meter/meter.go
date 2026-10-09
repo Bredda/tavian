@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bredda/tavian/internal/cost"
 	"github.com/bredda/tavian/internal/inspect"
 )
 
@@ -51,6 +52,9 @@ type UsageEvent struct {
 	CostMicroEUR *int64   `json:"cost_micro_eur,omitempty"`
 	EnergyWh     *float64 `json:"energy_wh,omitempty"`
 	CO2eGrams    *float64 `json:"co2e_g,omitempty"`
+	// Basis is what those figures were computed from: prices, energy factors,
+	// carbon intensity. Energy and carbon are estimates.
+	Basis *cost.Basis `json:"cost_basis,omitempty"`
 
 	// Inspection summarises what content inspection found: counts and detector
 	// versions, never content or fingerprints. Nil only for events written

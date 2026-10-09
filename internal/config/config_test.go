@@ -783,3 +783,125 @@ func TestInvalidPoliciesRejectTheConfiguration(t *testing.T) {
 		t.Errorf("missing policy dir: %v", err)
 	}
 }
+
+func TestPricesEnergyAndCarbon(t *testing.T) {
+	base := `
+profile: air-gapped
+carbon: { default_g_per_kwh: 300, regions: { fr-par: 55 } }
+backends:
+  - { id: paris, type: openai, base_url: "http://127.0.0.1:1/v1", destination_class: internal, region: fr-par }
+  - { id: other, type: openai, base_url: "http://127.0.0.1:2/v1", destination_class: internal, region: nowhere }
+  - { id: bare,  type: openai, base_url: "http://127.0.0.1:3/v1", destination_class: internal }
+models:
+  - name: m
+    type: chat
+    route:
+      - backend: paris
+        upstream_model: big
+        price: { input: 0.5, output: 1.5, cached_input: 0.1 }
+        energy: { wh_per_1k_input_tokens: 0.3, wh_per_1k_output_tokens: 1.2, method: estimated, confidence: low }
+      - { backend: other }
+`
+	cfg, err := Parse([]byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Compile(cfg, nil, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt := snap.Models["m"].Route[0]
+	if tgt.Price == nil || tgt.Price.Input != 0.5 || *tgt.Price.CachedInput != 0.1 || tgt.Energy == nil || tgt.Energy.Method != "estimated" {
+		t.Errorf("target = %+v", tgt)
+	}
+	if snap.Models["m"].Route[1].Price != nil {
+		t.Error("a target without a price has one")
+	}
+	if v := snap.Backends["paris"].CarbonGPerKWh; v == nil || *v != 55 {
+		t.Errorf("paris = %v, want its region's intensity", v)
+	}
+	if v := snap.Backends["other"].CarbonGPerKWh; v == nil || *v != 300 {
+		t.Errorf("a region that is not listed should get the default, got %v", v)
+	}
+	if v := snap.Backends["bare"].CarbonGPerKWh; v == nil || *v != 300 {
+		t.Errorf("no region: the default, got %v", v)
+	}
+
+	// without a default, a backend whose region is unknown has no intensity
+	noDefault := strings.Replace(base, "default_g_per_kwh: 300, ", "", 1)
+	cfg, _ = Parse([]byte(noDefault))
+	snap, err = Compile(cfg, nil, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Backends["other"].CarbonGPerKWh != nil || snap.Backends["bare"].CarbonGPerKWh != nil || snap.Backends["paris"].CarbonGPerKWh == nil {
+		t.Error("an intensity was made up")
+	}
+
+	for name, c := range map[string]struct{ from, to, want string }{
+		"negative price":    {"input: 0.5", "input: -1", "price.input"},
+		"huge price":        {"output: 1.5", "output: 1e9", "price.output"},
+		"bad method":        {"method: estimated", "method: guess", "energy.method"},
+		"no confidence":     {"confidence: low", "confidence: sure", "energy.confidence"},
+		"negative energy":   {"wh_per_1k_input_tokens: 0.3", "wh_per_1k_input_tokens: -3", "energy.wh_per_1k_input_tokens"},
+		"bad intensity":     {"fr-par: 55", "fr-par: 5000", "carbon.regions.fr-par"},
+		"negative default":  {"default_g_per_kwh: 300", "default_g_per_kwh: -1", "carbon.default_g_per_kwh"},
+		"bad region name":   {"region: nowhere", "region: Nowhere!", "region"},
+		"bad region in map": {"regions: { fr-par: 55 }", "regions: { Fr Par: 55 }", "carbon.regions"},
+	} {
+		cfg, err := Parse([]byte(strings.Replace(base, c.from, c.to, 1)))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := Compile(cfg, nil, func(string) string { return "" }); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+		}
+	}
+	if _, err := Parse([]byte(strings.Replace(base, "output: 1.5", "outputs: 1.5", 1))); err == nil {
+		t.Error("a typo in price was accepted")
+	}
+}
+
+func TestBudgetWithoutAPriceWarns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tavian.yaml"), []byte(`
+profile: air-gapped
+policy: { dir: policies }
+backends:
+  - { id: a, type: openai, base_url: "http://127.0.0.1:1/v1", destination_class: internal }
+models:
+  - name: priced
+    type: chat
+    route: [ { backend: a, price: { input: 1, output: 2 } } ]
+  - name: free
+    type: chat
+    route: [ { backend: a } ]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "policies"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policies", "p.yaml"), []byte("apiVersion: tavian/v1alpha1\nkind: Policy\nmetadata: { name: p }\nspec: { scope: { team: t }, quotas: [ { dimension: budget_eur, limit: 10 } ] }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, raw, err := Load(filepath.Join(dir, "tavian.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Compile(cfg, raw, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Warnings) != 1 || !strings.Contains(snap.Warnings[0], `"free"`) {
+		t.Errorf("warnings = %v, want one about the unpriced model", snap.Warnings)
+	}
+	// no budget policy, no warning
+	if err := os.Remove(filepath.Join(dir, "policies", "p.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	cfg, raw, _ = Load(filepath.Join(dir, "tavian.yaml"))
+	if snap, _ := Compile(cfg, raw, func(string) string { return "" }); len(snap.Warnings) != 0 {
+		t.Errorf("warnings = %v", snap.Warnings)
+	}
+}

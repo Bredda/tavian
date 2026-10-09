@@ -117,7 +117,7 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "tavian:", err)
 		return 1
 	}
-	for _, w := range snap.Policy.Warnings() {
+	for _, w := range append(snap.Policy.Warnings(), snap.Warnings...) {
 		fmt.Fprintln(stderr, "warning:", w)
 	}
 	fmt.Fprintf(stdout, "ok: revision=%s profile=%s backends=%d models=%d api_keys=%d policies=%d\n",
@@ -341,15 +341,17 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	return code
 }
 
-// seedQuotas gives the daily token counters of the scopes that have a limit the
-// usage recorded today. Counters that already count are left alone.
+// seedQuotas gives the daily token counters and monthly budget counters of the
+// scopes that have a limit the usage recorded so far. Counters that already count are left alone.
 func seedQuotas(ctx context.Context, log *slog.Logger, st *store.Store, qs *quota.Store, snap *config.Snapshot) error {
-	n, err := rollup.Seed(ctx, st.Pool(), qs, snap.Policy.Scopes(quota.TokensPerDay), time.Now())
+	n, err := rollup.Seed(ctx, st.Pool(), qs, rollup.Scopes{
+		Daily: snap.Policy.Scopes(quota.TokensPerDay), Monthly: snap.Policy.Scopes(quota.BudgetEUR),
+	}, time.Now())
 	if err != nil {
-		return fmt.Errorf("rebuilding today's token counts (daily limits would start from zero): %w", err)
+		return fmt.Errorf("rebuilding today's token counts and this month's spending (the limits would start from zero): %w", err)
 	}
 	if n > 0 {
-		log.Info("daily token counters rebuilt from recorded usage", "scopes", n)
+		log.Info("daily token and monthly budget counters rebuilt from recorded usage", "counters", n)
 	}
 	return nil
 }
@@ -530,6 +532,9 @@ func logInspection(log *slog.Logger, snap *config.Snapshot) {
 func logPolicies(log *slog.Logger, snap *config.Snapshot) {
 	for _, w := range snap.Policy.Warnings() {
 		log.Warn("policy warning", "warning", w)
+	}
+	for _, w := range snap.Warnings {
+		log.Warn("configuration warning", "warning", w)
 	}
 	log.Info("policies loaded", "policies", snap.Policy.Names())
 }

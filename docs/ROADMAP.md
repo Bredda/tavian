@@ -64,7 +64,7 @@ Gaps found when comparing [SECURITY.md](SECURITY.md) with the code, closed first
 - Egress guard and the three deployment profiles
 - Quotas: rpm, concurrency, tpm, tokens/day, budget (with prices, 2.7) — reserve/settle, in-memory
 - Audit: decision records, content level `hash` (policy setting: later), hash chain + signed seals + `tavian verify-audit`
-- Energy/carbon computed from configured profiles
+- Energy/carbon computed from configured profiles, cost from configured prices
 - `tavian policy test` and `shadow` mode
 
 Progress:
@@ -81,7 +81,7 @@ Progress:
 - [x] Quotas: `rpm`, `concurrency`, `tpm`, `tokens_per_day` set in policies, reserve/settle in memory, 429 with `Retry-After`, recorded in decision records (coalesced), soft and shadow modes. Budget in € arrives with prices (2.7); the day's token count is rebuilt from the hourly usage sums after a restart; shared counters: M3 ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#in-main))
 - [x] Outbox worker framework (consumer cursors, one instance per consumer, rows read in transaction order), hash chain over decision records, signed seals, `tavian audit-keygen` and `tavian verify-audit` ([AUDIT.md](AUDIT.md))
 - [x] Outbox retention (rows older than their retention and read by every consumer; decision records only under a signed seal; chain and seals kept; every removal logged for `verify-audit`) and a minimal hourly usage rollup that also rebuilds the daily token counters, closing the M1 item on consumers and retention ([AUDIT.md](AUDIT.md#retention))
-- [ ] Energy, carbon and price snapshot in usage events
+- [x] Prices, energy profiles and carbon intensities in the configuration; cost, energy and carbon in usage events (with the figures they were computed from), decision records (chained), hourly sums and metrics; the `budget_eur` quota (monthly, UTC) reserved at the chosen backend's price ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#cost-energy-and-carbon-in-main))
 - [ ] End-to-end finance demo test in CI
 
 ## M3 — Operability

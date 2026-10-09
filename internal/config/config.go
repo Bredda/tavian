@@ -17,6 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/bredda/tavian/internal/cost"
 	"github.com/bredda/tavian/internal/inspect"
 	"github.com/bredda/tavian/internal/policy"
 	"github.com/bredda/tavian/internal/taxonomy"
@@ -105,7 +106,9 @@ type Config struct {
 	Audit   AuditConfig   `yaml:"audit"`
 	Workers WorkersConfig `yaml:"workers"`
 	// Outbox sets how long events are kept in the database. Not reloadable.
-	Outbox   OutboxConfig `yaml:"outbox"`
+	Outbox OutboxConfig `yaml:"outbox"`
+	// Carbon is the carbon intensity of the electricity that backends use.
+	Carbon   CarbonConfig `yaml:"carbon"`
 	Backends []Backend    `yaml:"backends"`
 	Models   []Model      `yaml:"models"`
 	APIKeys  []APIKey     `yaml:"api_keys"`
@@ -187,6 +190,18 @@ func (r RetentionConfig) Keep() map[string]time.Duration {
 
 // MaxRetentionDays bounds the retention settings.
 const MaxRetentionDays = 36500
+
+// CarbonConfig gives the carbon intensity of the grid (gCO2e per kWh) where
+// backends run, entered by the operator: nothing is fetched from outside.
+// Without an intensity for a backend, its requests have energy but no carbon.
+// Changing it follows the configuration revision, which events record.
+type CarbonConfig struct {
+	// DefaultGPerKWh applies to backends without a region, or whose region is
+	// not listed.
+	DefaultGPerKWh *float64 `yaml:"default_g_per_kwh"`
+	// Regions maps a region name (the `region` of a backend) to its intensity.
+	Regions map[string]float64 `yaml:"regions"`
+}
 
 type ListenConfig struct {
 	// Data is the data-plane listener (OpenAI-compatible API).
@@ -307,10 +322,15 @@ type Backend struct {
 	// APIKeyEnv names the environment variable holding the credential sent to
 	// the backend. Secrets are referenced, never written in the config.
 	APIKeyEnv string `yaml:"api_key_env"`
+	// Region says where the backend runs, to find the carbon intensity of its
+	// electricity in carbon.regions.
+	Region string `yaml:"region"`
 
 	// Resolved at compile time.
 	URL        *url.URL `yaml:"-"`
 	Credential string   `yaml:"-"`
+	// CarbonGPerKWh is the intensity for this backend, nil if none is known.
+	CarbonGPerKWh *float64 `yaml:"-"`
 }
 
 // LogValue keeps the credential out of logs even if a Backend is logged whole.
@@ -333,6 +353,11 @@ type Model struct {
 type Target struct {
 	Backend       string `yaml:"backend"`
 	UpstreamModel string `yaml:"upstream_model"` // defaults to the model name
+	// Price and Energy describe this upstream model on this backend; both are
+	// optional. Without a price a request has no cost, without an energy
+	// profile no energy and no carbon.
+	Price  *cost.Price  `yaml:"price"`
+	Energy *cost.Energy `yaml:"energy"`
 }
 
 // APIKey is a credential for an application. Only the SHA-256 of the key is

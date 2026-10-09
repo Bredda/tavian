@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/cost"
 	"github.com/bredda/tavian/internal/policy"
 )
 
@@ -22,6 +23,9 @@ var ErrNoEligibleBackend = errors.New("no backend may receive this request")
 type Route struct {
 	Backend       *config.Backend
 	UpstreamModel string
+	// Price and Energy are those of the target taken; nil if not configured.
+	Price  *cost.Price
+	Energy *cost.Energy
 }
 
 // Candidate records one backend that was considered, and why it was set aside
@@ -51,7 +55,7 @@ func Resolve(s *config.Snapshot, model string, c policy.Constraints) (Route, []C
 			continue
 		}
 		seen = append(seen, Candidate{Backend: b.ID})
-		return Route{Backend: b, UpstreamModel: t.UpstreamModel}, seen, nil
+		return Route{Backend: b, UpstreamModel: t.UpstreamModel, Price: t.Price, Energy: t.Energy}, seen, nil
 	}
 	return Route{}, seen, ErrNoEligibleBackend
 }

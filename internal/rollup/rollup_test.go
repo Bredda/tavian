@@ -261,7 +261,7 @@ func TestSeedGivesScopesTheirUsage(t *testing.T) {
 	scopes := []quota.Scope{
 		{Organization: true}, {Team: "finance"}, {Application: "chat"}, {Team: "finance", Application: "ledger"}, {Team: "nobody"},
 	}
-	n, err := Seed(context.Background(), e.st.Pool(), store, scopes, now)
+	n, err := Seed(context.Background(), e.st.Pool(), store, Scopes{Daily: scopes}, now)
 	if err != nil || n != len(scopes) {
 		t.Fatalf("seeded %d of %d (%v)", n, len(scopes), err)
 	}
@@ -272,20 +272,20 @@ func TestSeedGivesScopesTheirUsage(t *testing.T) {
 	for scope, tokens := range want {
 		// holds at least `tokens`: one more does not fit under a limit of tokens...
 		tight := []quota.Limit{{Policy: "p", Scope: scope, Dimension: quota.TokensPerDay, Max: tokens}}
-		if _, res := store.Reserve(tight, 1); !res.Refused {
+		if _, res := store.Reserve(tight, quota.Tokens(1)); !res.Refused {
 			t.Errorf("%+v: the counter holds less than %d", scope, tokens)
 		}
 		// ...and at most that: one more fits under tokens+1
 		loose := []quota.Limit{{Policy: "p", Scope: scope, Dimension: quota.TokensPerDay, Max: tokens + 1}}
-		if _, res := store.Reserve(loose, 1); res.Refused {
+		if _, res := store.Reserve(loose, quota.Tokens(1)); res.Refused {
 			t.Errorf("%+v: the counter holds more than %d", scope, tokens)
 		}
 	}
 	// a counter that already counts is left alone
-	if n, _ := Seed(context.Background(), e.st.Pool(), store, scopes, now); n != 0 {
+	if n, _ := Seed(context.Background(), e.st.Pool(), store, Scopes{Daily: scopes}, now); n != 0 {
 		t.Errorf("seeded %d counters that existed", n)
 	}
-	if n, err := Seed(context.Background(), e.st.Pool(), store, nil, now); n != 0 || err != nil {
+	if n, err := Seed(context.Background(), e.st.Pool(), store, Scopes{}, now); n != 0 || err != nil {
 		t.Errorf("no scopes: %d %v", n, err)
 	}
 }
@@ -297,15 +297,15 @@ func TestSeededDayRollsOverLikeAnyOther(t *testing.T) {
 	e.usage(clk, ev{"input_tokens": 90, "output_tokens": 0})
 	waitFinal(t, e.st)
 	scope := quota.Scope{Team: "finance"}
-	if _, err := Seed(context.Background(), e.st.Pool(), store, []quota.Scope{scope}, clk); err != nil {
+	if _, err := Seed(context.Background(), e.st.Pool(), store, Scopes{Daily: []quota.Scope{scope}}, clk); err != nil {
 		t.Fatal(err)
 	}
 	lim := []quota.Limit{{Policy: "p", Scope: scope, Dimension: quota.TokensPerDay, Max: 100}}
-	if _, res := store.Reserve(lim, 20); !res.Refused {
+	if _, res := store.Reserve(lim, quota.Tokens(20)); !res.Refused {
 		t.Fatal("seeded usage ignored")
 	}
 	clk = clk.Add(25 * time.Hour)
-	if _, res := store.Reserve(lim, 100); res.Refused {
+	if _, res := store.Reserve(lim, quota.Tokens(100)); res.Refused {
 		t.Fatal("seeded usage survived the day")
 	}
 }
@@ -327,5 +327,71 @@ func TestTokensTodayWhenTheCursorStopsOnAnEvent(t *testing.T) {
 	used, err := TokensToday(context.Background(), e.st.Pool(), now)
 	if err != nil || total(used) != 30 {
 		t.Fatalf("used = %d (%v), want 30: two rolled up, one in the tail, none twice", total(used), err)
+	}
+}
+
+func TestEnergyAndCarbonAreSummedLikeCost(t *testing.T) {
+	e := newEnv(t)
+	h := time.Now().UTC().Truncate(time.Hour)
+	e.usage(h, ev{"energy_wh": 1.5, "co2e_g": 0.25})
+	e.usage(h, ev{"energy_wh": 0.5})
+	e.usage(h, ev{"model": "bare"})
+	e.catchUp()
+	var wh, co2 *float64
+	_ = e.st.Pool().QueryRow(context.Background(), `SELECT energy_wh, co2e_g FROM usage_hourly WHERE model = 'm'`).Scan(&wh, &co2)
+	if wh == nil || *wh != 2.0 || co2 == nil || *co2 != 0.25 {
+		t.Fatalf("energy %v, carbon %v", wh, co2)
+	}
+	_ = e.st.Pool().QueryRow(context.Background(), `SELECT energy_wh, co2e_g FROM usage_hourly WHERE model = 'bare'`).Scan(&wh, &co2)
+	if wh != nil || co2 != nil {
+		t.Fatalf("an hour without profiles has energy %v carbon %v", wh, co2)
+	}
+}
+
+func TestSpendingThisMonthIsTheRolledUpSumsPlusTheTail(t *testing.T) {
+	e := newEnv(t)
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	e.usage(time.Date(2026, 2, 28, 23, 0, 0, 0, time.UTC), ev{"cost_micro_eur": 9_000_000}) // last month
+	e.usage(time.Date(2026, 3, 1, 0, 30, 0, 0, time.UTC), ev{"cost_micro_eur": 1000})
+	e.usage(time.Date(2026, 3, 5, 0, 0, 0, 0, time.UTC), ev{"team": "research", "application": "chat", "cost_micro_eur": 300})
+	e.usage(time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC), ev{"model": "free"}) // no price: no cost
+	e.catchUp()
+	e.usage(time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC), ev{"cost_micro_eur": 40}) // not yet rolled up
+	e.usage(time.Date(2026, 2, 27, 0, 0, 0, 0, time.UTC), ev{"cost_micro_eur": 5_000_000})
+	waitFinal(t, e.st)
+
+	spent, err := SpentThisMonth(context.Background(), e.st.Pool(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]int64{}
+	for _, u := range spent {
+		by[u.Team+"/"+u.Application] += u.Tokens
+	}
+	if by["finance/ledger"] != 1040 || by["research/chat"] != 300 || total(spent) != 1340 {
+		t.Fatalf("spent = %v, want finance 1040 (1000 rolled + 40 in the tail), research 300, nothing from February", by)
+	}
+}
+
+func TestSeedGivesBudgetsTheirSpending(t *testing.T) {
+	e := newEnv(t)
+	now := time.Now().UTC()
+	e.usage(now, ev{"cost_micro_eur": 700})
+	e.usage(now, ev{"team": "research", "application": "chat", "cost_micro_eur": 90})
+	waitFinal(t, e.st)
+	store := quota.NewStore(nil)
+	n, err := Seed(context.Background(), e.st.Pool(), store, Scopes{Monthly: []quota.Scope{{Team: "finance"}, {Organization: true}}}, now)
+	if err != nil || n != 2 {
+		t.Fatalf("seeded %d (%v)", n, err)
+	}
+	for scope, spent := range map[quota.Scope]int64{{Team: "finance"}: 700, {Organization: true}: 790} {
+		tight := []quota.Limit{{Policy: "p", Scope: scope, Dimension: quota.BudgetEUR, Max: spent}}
+		if _, res := store.Reserve(tight, quota.Amount{MicroEUR: 1}); !res.Refused {
+			t.Errorf("%+v: less than %d seeded", scope, spent)
+		}
+		loose := []quota.Limit{{Policy: "p", Scope: scope, Dimension: quota.BudgetEUR, Max: spent + 1}}
+		if _, res := store.Reserve(loose, quota.Amount{MicroEUR: 1}); res.Refused {
+			t.Errorf("%+v: more than %d seeded", scope, spent)
+		}
 	}
 }

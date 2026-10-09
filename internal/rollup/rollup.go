@@ -34,6 +34,8 @@ type sums struct {
 	input, output, cached, reasoning int64
 	cost                             int64
 	hasCost                          bool
+	energy, co2                      float64
+	hasEnergy, hasCO2                bool
 }
 
 // usageEvent is the part of a usage event the rollup reads.
@@ -52,6 +54,8 @@ type usageEvent struct {
 	ReasoningTokens int64     `json:"reasoning_tokens"`
 	UsageKnown      bool      `json:"usage_known"`
 	CostMicroEUR    *int64    `json:"cost_micro_eur"`
+	EnergyWh        *float64  `json:"energy_wh"`
+	CO2eGrams       *float64  `json:"co2e_g"`
 }
 
 // Consumer is the outbox consumer that maintains usage_hourly.
@@ -100,6 +104,14 @@ func (c Consumer) Handle(ctx context.Context, tx pgx.Tx, batch []outbox.Row) err
 			s.cost += *e.CostMicroEUR
 			s.hasCost = true
 		}
+		if e.EnergyWh != nil {
+			s.energy += *e.EnergyWh
+			s.hasEnergy = true
+		}
+		if e.CO2eGrams != nil {
+			s.co2 += *e.CO2eGrams
+			s.hasCO2 = true
+		}
 	}
 	b := &pgx.Batch{}
 	for k, s := range acc {
@@ -107,10 +119,18 @@ func (c Consumer) Handle(ctx context.Context, tx pgx.Tx, batch []outbox.Row) err
 		if s.hasCost {
 			cost = &s.cost
 		}
+		var energy, co2 *float64
+		if s.hasEnergy {
+			energy = &s.energy
+		}
+		if s.hasCO2 {
+			co2 = &s.co2
+		}
 		b.Queue(`
 INSERT INTO usage_hourly (hour, team, application, principal, model, backend, outcome,
-                          requests, usage_unknown, input_tokens, output_tokens, cached_tokens, reasoning_tokens, cost_micro_eur)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                          requests, usage_unknown, input_tokens, output_tokens, cached_tokens, reasoning_tokens, cost_micro_eur,
+                          energy_wh, co2e_g)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (hour, team, application, principal, model, backend, outcome) DO UPDATE SET
     requests         = usage_hourly.requests + EXCLUDED.requests,
     usage_unknown    = usage_hourly.usage_unknown + EXCLUDED.usage_unknown,
@@ -119,9 +139,13 @@ ON CONFLICT (hour, team, application, principal, model, backend, outcome) DO UPD
     cached_tokens    = usage_hourly.cached_tokens + EXCLUDED.cached_tokens,
     reasoning_tokens = usage_hourly.reasoning_tokens + EXCLUDED.reasoning_tokens,
     cost_micro_eur   = CASE WHEN usage_hourly.cost_micro_eur IS NULL AND EXCLUDED.cost_micro_eur IS NULL THEN NULL
-                            ELSE COALESCE(usage_hourly.cost_micro_eur, 0) + COALESCE(EXCLUDED.cost_micro_eur, 0) END`,
+                            ELSE COALESCE(usage_hourly.cost_micro_eur, 0) + COALESCE(EXCLUDED.cost_micro_eur, 0) END,
+    energy_wh        = CASE WHEN usage_hourly.energy_wh IS NULL AND EXCLUDED.energy_wh IS NULL THEN NULL
+                            ELSE COALESCE(usage_hourly.energy_wh, 0) + COALESCE(EXCLUDED.energy_wh, 0) END,
+    co2e_g           = CASE WHEN usage_hourly.co2e_g IS NULL AND EXCLUDED.co2e_g IS NULL THEN NULL
+                            ELSE COALESCE(usage_hourly.co2e_g, 0) + COALESCE(EXCLUDED.co2e_g, 0) END`,
 			k.hour, k.team, k.application, k.principal, k.model, k.backend, k.outcome,
-			s.requests, s.unknown, s.input, s.output, s.cached, s.reasoning, cost)
+			s.requests, s.unknown, s.input, s.output, s.cached, s.reasoning, cost, energy, co2)
 	}
 	res := tx.SendBatch(ctx, b)
 	for i := 0; i < b.Len(); i++ {
@@ -136,7 +160,8 @@ ON CONFLICT (hour, team, application, principal, model, backend, outcome) DO UPD
 	return nil
 }
 
-// TeamApp is the tokens one team and application used.
+// TeamApp is what one team and application used: tokens, or micro-euros,
+// depending on the query.
 type TeamApp struct {
 	Team, Application string
 	Tokens            int64
@@ -148,27 +173,43 @@ type TeamApp struct {
 // from one snapshot and no event is counted twice or missed.
 func TokensToday(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]TeamApp, error) {
 	n := now.UTC()
-	dayStart := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
+	return usedSince(ctx, pool, time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC),
+		`input_tokens + output_tokens`,
+		`COALESCE((o.payload->>'input_tokens')::bigint, 0) + COALESCE((o.payload->>'output_tokens')::bigint, 0)`)
+}
+
+// SpentThisMonth returns the money (micro-euros, in TeamApp.Tokens) spent since
+// the 1st of the month of now, UTC, the same way.
+func SpentThisMonth(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]TeamApp, error) {
+	n := now.UTC()
+	return usedSince(ctx, pool, time.Date(n.Year(), n.Month(), 1, 0, 0, 0, 0, time.UTC),
+		`COALESCE(cost_micro_eur, 0)`,
+		`COALESCE((o.payload->>'cost_micro_eur')::bigint, 0)`)
+}
+
+// usedSince sums an amount over the hourly sums from since on, plus the usage
+// events after the rollup's cursor that happened since then. rolled and tail
+// are SQL expressions for the same quantity in the two places.
+func usedSince(ctx context.Context, pool *pgxpool.Pool, since time.Time, rolled, tail string) ([]TeamApp, error) {
 	rs, err := pool.Query(ctx, `
 WITH cur AS (
     SELECT COALESCE((SELECT last_xid FROM outbox_consumers WHERE name = $2), 0) AS xid,
            COALESCE((SELECT last_seq FROM outbox_consumers WHERE name = $2), 0) AS seq
 ), rolled AS (
-    SELECT team, application, sum(input_tokens + output_tokens) AS tokens
+    SELECT team, application, sum(`+rolled+`) AS amount
     FROM usage_hourly WHERE hour >= $1 GROUP BY team, application
 ), tail AS (
-    SELECT o.payload->>'team' AS team, o.payload->>'application' AS application,
-           sum(COALESCE((o.payload->>'input_tokens')::bigint, 0) + COALESCE((o.payload->>'output_tokens')::bigint, 0)) AS tokens
+    SELECT o.payload->>'team' AS team, o.payload->>'application' AS application, sum(`+tail+`) AS amount
     FROM outbox o, cur
     WHERE o.kind = $3 AND (o.xid, o.seq) > (cur.xid::text::xid8, cur.seq)
       AND (o.payload->>'time')::timestamptz >= $1
     GROUP BY 1, 2
 )
-SELECT team, application, sum(tokens)::bigint
+SELECT team, application, sum(amount)::bigint
 FROM (SELECT * FROM rolled UNION ALL SELECT * FROM tail) u
-GROUP BY team, application`, dayStart, ConsumerName, KindUsage)
+GROUP BY team, application`, since, ConsumerName, KindUsage)
 	if err != nil {
-		return nil, fmt.Errorf("tokens used today: %w", err)
+		return nil, fmt.Errorf("usage since %s: %w", since.Format(time.DateOnly), err)
 	}
 	defer rs.Close()
 	var out []TeamApp
@@ -176,7 +217,7 @@ GROUP BY team, application`, dayStart, ConsumerName, KindUsage)
 		var t TeamApp
 		var team, app *string
 		if err := rs.Scan(&team, &app, &t.Tokens); err != nil {
-			return nil, fmt.Errorf("tokens used today: %w", err)
+			return nil, fmt.Errorf("usage since %s: %w", since.Format(time.DateOnly), err)
 		}
 		if team != nil {
 			t.Team = *team
@@ -189,28 +230,45 @@ GROUP BY team, application`, dayStart, ConsumerName, KindUsage)
 	return out, rs.Err()
 }
 
-// Seed gives the daily token counters of store the usage already recorded
-// today, for the scopes that have a daily limit. A counter that exists is left
-// alone: it knows better. It returns how many counters it set.
-func Seed(ctx context.Context, pool *pgxpool.Pool, store *quota.Store, scopes []quota.Scope, now time.Time) (int, error) {
-	if len(scopes) == 0 {
-		return 0, nil
-	}
-	used, err := TokensToday(ctx, pool, now)
-	if err != nil {
-		return 0, err
-	}
+// Scopes are the scopes that have a daily token limit and a monthly budget.
+type Scopes struct{ Daily, Monthly []quota.Scope }
+
+// Seed gives the daily token counters and the monthly budget counters of store
+// the usage already recorded, for the scopes that have a limit. A counter that
+// exists is left alone: it knows better. It returns how many counters it set.
+func Seed(ctx context.Context, pool *pgxpool.Pool, store *quota.Store, scopes Scopes, now time.Time) (int, error) {
 	n := 0
-	for _, sc := range scopes {
-		var total int64
-		for _, u := range used {
-			if sc.Matches(u.Team, u.Application) {
-				total += u.Tokens
+	if len(scopes.Daily) > 0 {
+		used, err := TokensToday(ctx, pool, now)
+		if err != nil {
+			return 0, err
+		}
+		for _, sc := range scopes.Daily {
+			if store.SeedTokensPerDay(sc, sumFor(sc, used)) {
+				n++
 			}
 		}
-		if store.SeedTokensPerDay(sc, total) {
-			n++
+	}
+	if len(scopes.Monthly) > 0 {
+		spent, err := SpentThisMonth(ctx, pool, now)
+		if err != nil {
+			return n, err
+		}
+		for _, sc := range scopes.Monthly {
+			if store.SeedBudget(sc, sumFor(sc, spent)) {
+				n++
+			}
 		}
 	}
 	return n, nil
+}
+
+func sumFor(sc quota.Scope, used []TeamApp) int64 {
+	var total int64
+	for _, u := range used {
+		if sc.Matches(u.Team, u.Application) {
+			total += u.Tokens
+		}
+	}
+	return total
 }

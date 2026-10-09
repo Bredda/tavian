@@ -10,6 +10,7 @@ import (
 
 	"github.com/bredda/tavian/internal/chain"
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/cost"
 	"github.com/bredda/tavian/internal/inspect"
 	"github.com/bredda/tavian/internal/outbox"
 	"github.com/bredda/tavian/internal/policy"
@@ -37,6 +38,7 @@ type Metrics struct {
 	consumerEvents  *prometheus.CounterVec
 	consumerErrors  *prometheus.CounterVec
 	consumerPending *prometheus.GaugeVec
+	cost            *prometheus.CounterVec
 	pruned          *prometheus.CounterVec
 	pruneErrors     prometheus.Counter
 
@@ -107,6 +109,10 @@ func NewMetrics() *Metrics {
 			Name: "tavian_outbox_consumer_pending",
 			Help: "Outbox events waiting for a consumer (counted up to 10001).",
 		}, []string{"consumer"}),
+		cost: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_cost_total",
+			Help: "What requests cost, by model, backend and unit: micro_eur (from configured prices), energy_wh and co2e_grams (estimates).",
+		}, []string{"model", "backend", "unit"}),
 		pruned: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "tavian_outbox_pruned_total",
 			Help: "Events removed from the outbox by retention, by kind.",
@@ -124,7 +130,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
-		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate, m.consumerEvents, m.consumerErrors, m.consumerPending, m.pruned, m.pruneErrors,
+		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate, m.consumerEvents, m.consumerErrors, m.consumerPending, m.cost, m.pruned, m.pruneErrors,
 	)
 	return m
 }
@@ -169,6 +175,19 @@ func (m *Metrics) ObserveConsumer(c outbox.Cycle) {
 		return
 	}
 	m.consumerPending.WithLabelValues(c.Consumer).Set(float64(c.Pending))
+}
+
+// observeCost counts the money, energy and carbon of a request.
+func (m *Metrics) observeCost(model, backend string, r cost.Result) {
+	if r.CostMicroEUR != nil {
+		m.cost.WithLabelValues(model, backend, "micro_eur").Add(float64(*r.CostMicroEUR))
+	}
+	if r.EnergyWh != nil {
+		m.cost.WithLabelValues(model, backend, "energy_wh").Add(*r.EnergyWh)
+	}
+	if r.CO2eGrams != nil {
+		m.cost.WithLabelValues(model, backend, "co2e_grams").Add(*r.CO2eGrams)
+	}
 }
 
 // ObservePruned counts events removed by retention.

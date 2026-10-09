@@ -135,9 +135,18 @@ log:
 # egress:
 #   internal_cidrs: ["10.0.0.0/8"]
 
+# Carbon intensity of the electricity where backends run, in gCO2e per kWh. Enter
+# your own figures: nothing is fetched from outside. A backend's `region` picks one;
+# `default_g_per_kwh` applies to the others. Without an intensity a request has an
+# energy estimate but no carbon figure.
+# carbon:
+#   default_g_per_kwh: 300
+#   regions: { fr-paris: 55, de-frankfurt: 350 }
+
 backends:
   - id: vllm-a
     type: openai                          # OpenAI-compatible: vLLM, llama.cpp, ...
+    # region: fr-paris                    # where it runs: see carbon.regions
     base_url: http://vllm-a.internal:8000/v1
     destination_class: internal           # internal | approved-external | public-external
     max_classification: restricted        # most sensitive label it may receive (default depends on class)
@@ -156,6 +165,17 @@ models:
     route:
       - backend: vllm-a
         upstream_model: meta-llama/Llama-3.3-70B-Instruct   # defaults to the model name
+        # Optional. Without a price a request has no cost (and uses no budget_eur
+        # quota); without an energy profile it has no energy and no carbon.
+        # price:                          # EUR per million tokens
+        #   input: 0.50
+        #   output: 1.50
+        #   cached_input: 0.10            # default: the input price
+        # energy:                         # an ESTIMATE, always labelled as one
+        #   wh_per_1k_input_tokens: 0.3
+        #   wh_per_1k_output_tokens: 1.2
+        #   method: estimated             # estimated | benchmark | measured
+        #   confidence: low               # low | medium | high
 
 api_keys:
   - id: research-app
