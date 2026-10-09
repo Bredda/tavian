@@ -20,13 +20,23 @@ The API reference is `internal/docs/openapi.yaml` (hand-written; a test checks t
 
 No Go toolchain? The CI uses the same commands; locally you can run them through the `golang` Docker image.
 
+## How work is tracked
+
+The work is tracked on GitHub, not in the repository:
+
+- **Issues** are the backlog. Use the forms: *feature*, *bug*, or *decision* (a question to settle before building: design, security, scope). An `epic` groups related issues with a task list. Labels say the type (`enhancement`, `bug`, `decision`, `chore`, `epic`, `documentation`) and the area (`area:inspection`, `area:policy`, `area:quota`, `area:audit`, `area:routing`, `area:api`, `area:ops`, `area:security`, `area:ui`).
+- **Milestones** are the roadmap milestones ([docs/ROADMAP.md](docs/ROADMAP.md) says what each is for); the **project board** adds status, priority and size.
+- **Decisions** are made in a `decision` issue, in the open, before the code; the outcome is recorded as an [ADR](docs/adr/README.md) and the issue closed with a link to it.
+- **Pull requests** say `Closes #n` in their description, so that merging closes the issue and moves it to *Done*. The documentation describes what the software does today; it does not carry a to-do list.
+- **Security problems** are never issues: see [.github/SECURITY.md](.github/SECURITY.md).
+
 ## Workflow: trunk-based
 
 `main` is always releasable. There is no `develop` branch.
 
 1. Branch from `main` with a short-lived branch named `<type>/<short-description>` (`feat/oidc-auth`, `fix/stream-usage`). Keep it to a few days at most; split large work into independently mergeable steps and hide unfinished behaviour behind configuration rather than a long-lived branch.
 2. Open a pull request. **The PR title is the commit message** (we squash-merge) and must follow [Conventional Commits](https://www.conventionalcommits.org): `type(scope): subject`. CI checks it.
-3. CI must be green (`pr-title`, `lint`, `test`, `build`, `docker`, `workflows`). Squash-merge; the branch is deleted.
+3. CI must be green (`pr-title`, `lint`, `test`, `build`, `docker`, `workflows`, `conformance`, `demo`). Squash-merge; the branch is deleted.
 
 Commit types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `revert`. Scope is optional, typically a package (`auth`, `config`, `egress`, `server`, `provider`, `policy`, …). The subject is lowercase, imperative, no trailing period. Mark breaking changes with `!` (`feat(config)!: rename listen.data`) and explain them in the PR description.
 

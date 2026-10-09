@@ -6,6 +6,8 @@ Mark breaking changes with "!" — e.g. "feat(config)!: rename listen.data".
 
 ## What and why
 
+Closes #
+
 ## How to verify
 
 ## Checklist

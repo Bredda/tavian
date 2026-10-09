@@ -1,0 +1,37 @@
+name: Feature or improvement
+description: Something Tavian should do, or do better
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tavian is pre-alpha and the design is still moving: for anything large, say what problem you have before how to solve it.
+        Never paste prompts, completions, API keys or credentials here.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve, and for whom?
+      description: The situation, not the solution. Which persona (see docs/VISION.md) is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would like to happen. Mention the pipeline stage or component concerned, if you know.
+    validations:
+      required: false
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Observable outcomes, one per line. A test or a demo step makes a good one.
+    validations:
+      required: false
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and audit implications
+      description: Does it touch what is inspected, logged, recorded, or sent outside? Would it need a fail-closed behaviour?
+    validations:
+      required: false

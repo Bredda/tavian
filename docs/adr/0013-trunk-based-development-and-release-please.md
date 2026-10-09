@@ -19,7 +19,7 @@ We want a clean release process from the first commit: reproducible versions, an
 - Discipline on PR titles is mandatory (hence the CI check).
 - release-please PRs need a PAT/GitHub App token (`RELEASE_PLEASE_TOKEN`) for CI to run on them; documented in CONTRIBUTING.md.
 - Supporting several release lines later needs per-branch release-please config.
-- Artifact signing (cosign), SBOM and provenance attestations are not included yet; tracked in OPEN_QUESTIONS.
+- Artifact signing (cosign), SBOM and provenance attestations are not included yet; tracked in [#68](https://github.com/Bredda/tavian/issues/68) and [#91](https://github.com/Bredda/tavian/issues/91).
 
 ## Alternatives considered
 - Gitflow with release-please — works poorly, see Context.
