@@ -1,0 +1,408 @@
+package quota
+
+import (
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newClock() *clock { return &clock{t: time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)} }
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+var team = Scope{Team: "finance"}
+
+func lim(d Dimension, max int64) Limit {
+	return Limit{Policy: "p", Scope: team, Dimension: d, Max: max}
+}
+
+func TestRPMSlidingWindow(t *testing.T) {
+	clk := newClock()
+	s := NewStore(clk.now)
+	limits := []Limit{lim(RPM, 3)}
+	for i := 0; i < 3; i++ {
+		if _, res := s.Admit(limits); res.Refused {
+			t.Fatalf("request %d refused", i)
+		}
+		clk.advance(10 * time.Second)
+	}
+	// 30 s in: three requests in the last minute
+	_, res := s.Admit(limits)
+	if !res.Refused {
+		t.Fatal("fourth request in a minute was admitted")
+	}
+	if got := res.Primary().Retry; got != 30*time.Second {
+		t.Fatalf("retry = %v, want 30s (the first request leaves the window then)", got)
+	}
+	clk.advance(30 * time.Second) // the first request is now a minute old
+	if _, res := s.Admit(limits); res.Refused {
+		t.Fatal("still refused after the oldest request left the window")
+	}
+}
+
+func TestRefusedRequestsAreNotCounted(t *testing.T) {
+	clk := newClock()
+	s := NewStore(clk.now)
+	limits := []Limit{lim(RPM, 1)}
+	s.Admit(limits)
+	for i := 0; i < 50; i++ {
+		s.Admit(limits) // refused
+	}
+	clk.advance(61 * time.Second)
+	if _, res := s.Admit(limits); res.Refused {
+		t.Fatal("refusals extended their own penalty")
+	}
+}
+
+func TestConcurrencyIsHeldUntilRelease(t *testing.T) {
+	s := NewStore(nil)
+	limits := []Limit{lim(Concurrency, 2)}
+	a, _ := s.Admit(limits)
+	b, _ := s.Admit(limits)
+	if _, res := s.Admit(limits); !res.Refused {
+		t.Fatal("third concurrent request admitted")
+	}
+	a.Release()
+	a.Release() // harmless
+	c, res := s.Admit(limits)
+	if res.Refused {
+		t.Fatal("slot not given back by Release")
+	}
+	if _, res := s.Admit(limits); !res.Refused {
+		t.Fatal("a double Release gave back two slots")
+	}
+	b.Release()
+	c.Release()
+	var nilSlot *Slot
+	nilSlot.Release()
+}
+
+func TestAdmitIsAllOrNothing(t *testing.T) {
+	clk := newClock()
+	s := NewStore(clk.now)
+	org := Limit{Policy: "o", Scope: Scope{Organization: true}, Dimension: RPM, Max: 100}
+	strict := lim(RPM, 1)
+	conc := lim(Concurrency, 5)
+	limits := []Limit{org, strict, conc}
+	slot, res := s.Admit(limits)
+	if res.Refused {
+		t.Fatal("first request refused")
+	}
+	slot.Release()
+	if _, res := s.Admit(limits); !res.Refused {
+		t.Fatal("team rpm not enforced")
+	}
+	// the refused request must not have counted against the org or the team
+	// concurrency; only the first request is in the org's minute
+	orgOnly := []Limit{{Policy: "o", Scope: Scope{Organization: true}, Dimension: RPM, Max: 2}}
+	if _, res := s.Admit(orgOnly); res.Refused {
+		t.Fatal("org counted the refused request")
+	}
+	if _, res := s.Admit(orgOnly); !res.Refused {
+		t.Fatal("org counter lost the admitted requests")
+	}
+}
+
+func TestTwoPoliciesOnOneCounterCountOnce(t *testing.T) {
+	s := NewStore(nil)
+	a := Limit{Policy: "a", Scope: team, Dimension: RPM, Max: 10}
+	b := Limit{Policy: "b", Scope: team, Dimension: RPM, Max: 2}
+	limits := []Limit{a, b}
+	s.Admit(limits)
+	s.Admit(limits)
+	if _, res := s.Admit(limits); !res.Refused {
+		t.Fatal("two requests were counted as four, or b was ignored")
+	}
+	if res := func() Result { _, r := s.Admit([]Limit{a}); return r }(); res.Refused {
+		t.Fatal("limit a, at 10, refused after two requests: the counter was incremented twice per request")
+	}
+}
+
+func TestSoftAndShadowLimitsNeverRefuse(t *testing.T) {
+	s := NewStore(nil)
+	soft := lim(RPM, 1)
+	soft.Soft = true
+	shadow := Limit{Policy: "s", Scope: Scope{Application: "x"}, Dimension: RPM, Max: 1, Shadow: true}
+	limits := []Limit{soft, shadow}
+	s.Admit(limits)
+	_, res := s.Admit(limits)
+	if res.Refused {
+		t.Fatal("soft or shadow limit refused")
+	}
+	if len(res.Exceeded) != 2 {
+		t.Fatalf("exceeded = %d, want both reported", len(res.Exceeded))
+	}
+	if res.Primary() != nil {
+		t.Fatal("a request that was not refused has a primary check")
+	}
+	if got := []string{res.Exceeded[0].Limit.Effect(), res.Exceeded[1].Limit.Effect()}; got[0] != "soft" || got[1] != "shadow" {
+		t.Fatalf("effects = %v", got)
+	}
+}
+
+func TestReserveAndSettleTPM(t *testing.T) {
+	clk := newClock()
+	s := NewStore(clk.now)
+	limits := []Limit{lim(TPM, 1000)}
+	r, res := s.Reserve(limits, 800)
+	if res.Refused || r.Tokens() != 800 {
+		t.Fatalf("reserve 800 of 1000 failed: %+v", res)
+	}
+	if _, res := s.Reserve(limits, 300); !res.Refused {
+		t.Fatal("reservations did not add up")
+	}
+	r.Settle(100) // the answer was short: 700 come back
+	r2, res := s.Reserve(limits, 800)
+	if res.Refused {
+		t.Fatal("settle did not return the unused reservation")
+	}
+	r2.Settle(800)
+	r.Settle(5000) // second settle is ignored
+	if _, res := s.Reserve(limits, 101); !res.Refused {
+		t.Fatal("window should hold 100 + 800 now")
+	}
+	if _, res := s.Reserve(limits, 100); res.Refused {
+		t.Fatal("a second Settle changed the count")
+	}
+}
+
+func TestSettleCanOverdraw(t *testing.T) {
+	s := NewStore(nil)
+	limits := []Limit{lim(TokensPerDay, 1000)}
+	r, _ := s.Reserve(limits, 100)
+	r.Settle(5000) // far more than reserved: owed
+	_, res := s.Reserve(limits, 1)
+	if !res.Refused {
+		t.Fatal("tokens already produced were forgiven")
+	}
+	if res.Primary().Used != 5000 {
+		t.Fatalf("used = %d, want 5000", res.Primary().Used)
+	}
+}
+
+func TestSettleAfterTheWindowMoved(t *testing.T) {
+	clk := newClock()
+	s := NewStore(clk.now)
+	limits := []Limit{lim(TPM, 1000)}
+	r, _ := s.Reserve(limits, 600)
+	clk.advance(3 * time.Minute) // a long stream: the reservation left the window
+	r.Settle(400)
+	if _, res := s.Reserve(limits, 700); !res.Refused {
+		t.Fatal("tokens used by a long answer were lost when their reservation expired")
+	}
+	if _, res := s.Reserve(limits, 600); res.Refused {
+		t.Fatal("expired reservation was charged twice")
+	}
+}
+
+func TestSettleNeverGoesBelowZero(t *testing.T) {
+	s := NewStore(nil)
+	limits := []Limit{lim(TPM, 10), lim(TokensPerDay, 10)}
+	r, _ := s.Reserve(limits, 5)
+	r.Settle(0)
+	r2, res := s.Reserve(limits, 10)
+	if res.Refused {
+		t.Fatal("refund left a debt behind")
+	}
+	r2.Settle(-7) // a faulty caller
+	if _, res := s.Reserve(limits, 10); res.Refused {
+		t.Fatal("negative settle was not clamped")
+	}
+}
+
+func TestDayRollsOverAtMidnightUTC(t *testing.T) {
+	clk := newClock() // 12:00 UTC
+	s := NewStore(clk.now)
+	limits := []Limit{lim(TokensPerDay, 1000)}
+	r, _ := s.Reserve(limits, 1000)
+	r.Settle(1000)
+	_, res := s.Reserve(limits, 1)
+	if !res.Refused {
+		t.Fatal("daily limit not enforced")
+	}
+	if got := res.Primary().Retry; got != 12*time.Hour {
+		t.Fatalf("retry = %v, want 12h until midnight UTC", got)
+	}
+	clk.advance(12 * time.Hour)
+	if _, res := s.Reserve(limits, 1000); res.Refused {
+		t.Fatal("counter not reset at midnight UTC")
+	}
+}
+
+func TestSettleAcrossMidnightCountsOnTheNewDay(t *testing.T) {
+	clk := newClock()
+	s := NewStore(clk.now)
+	limits := []Limit{lim(TokensPerDay, 1000)}
+	r, _ := s.Reserve(limits, 900)
+	clk.advance(13 * time.Hour)
+	r.Settle(200)
+	if _, res := s.Reserve(limits, 801); !res.Refused {
+		t.Fatal("tokens of a request that ended after midnight were not counted")
+	}
+	if _, res := s.Reserve(limits, 800); res.Refused {
+		t.Fatal("the reservation of the previous day leaked into the new one")
+	}
+}
+
+func TestARequestThatCanNeverFit(t *testing.T) {
+	s := NewStore(nil)
+	for _, d := range []Dimension{TPM, TokensPerDay} {
+		_, res := s.Reserve([]Limit{lim(d, 100)}, 101)
+		p := res.Primary()
+		if p == nil || !p.Never || p.Retry != 0 {
+			t.Fatalf("%s: a request larger than the limit must say waiting will not help: %+v", d, p)
+		}
+	}
+}
+
+func TestReserveIsAllOrNothing(t *testing.T) {
+	s := NewStore(nil)
+	big := Limit{Policy: "o", Scope: Scope{Organization: true}, Dimension: TPM, Max: 10000}
+	small := lim(TPM, 100)
+	if _, res := s.Reserve([]Limit{big, small}, 500); !res.Refused {
+		t.Fatal("small limit ignored")
+	}
+	// nothing may have been counted against the org
+	if _, res := s.Reserve([]Limit{big}, 10000); res.Refused {
+		t.Fatal("a refused reservation was counted against another scope")
+	}
+}
+
+func TestOnlyTheRightDimensionsAreChecked(t *testing.T) {
+	s := NewStore(nil)
+	if slot, res := s.Admit([]Limit{lim(TPM, 1)}); slot != nil || res.Refused {
+		t.Fatal("Admit looked at a token limit")
+	}
+	if r, res := s.Reserve([]Limit{lim(RPM, 1), lim(Concurrency, 1)}, 1<<20); r != nil || res.Refused {
+		t.Fatal("Reserve looked at an admission limit")
+	}
+	var nilRes *Reservation
+	nilRes.Settle(5)
+	if nilRes.Tokens() != 0 {
+		t.Fatal("nil reservation has tokens")
+	}
+}
+
+// Under concurrency exactly the limit is admitted, never more: the check and
+// the count are one step.
+func TestConcurrentAdmissionNeverExceedsTheLimit(t *testing.T) {
+	const limit, callers = 50, 400
+	s := NewStore(nil)
+	limits := []Limit{lim(RPM, limit), lim(Concurrency, limit)}
+	var admitted atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if slot, res := s.Admit(limits); !res.Refused {
+				admitted.Add(1)
+				_ = slot // held: concurrency never gets released in this test
+			}
+		}()
+	}
+	wg.Wait()
+	if admitted.Load() != limit {
+		t.Fatalf("admitted %d, want exactly %d", admitted.Load(), limit)
+	}
+}
+
+func TestConcurrentReservationsNeverExceedTheLimit(t *testing.T) {
+	const limit, per, callers = 10000, 100, 400
+	s := NewStore(nil)
+	limits := []Limit{lim(TPM, limit), lim(TokensPerDay, limit)}
+	var admitted atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if r, res := s.Reserve(limits, per); !res.Refused {
+				admitted.Add(1)
+				r.Settle(per)
+			}
+		}()
+	}
+	wg.Wait()
+	if admitted.Load() != limit/per {
+		t.Fatalf("admitted %d requests of %d tokens, want exactly %d", admitted.Load(), per, limit/per)
+	}
+}
+
+func TestEstimateIsConservative(t *testing.T) {
+	// English runs at about four bytes a token, CJK at three: three is never low
+	if got := Estimate(3000, 0); got < 1000 {
+		t.Fatalf("estimate for 3000 bytes = %d, want at least 1000", got)
+	}
+	if got := Estimate(0, 500); got < 500 {
+		t.Fatalf("the answer cap is missing from the estimate: %d", got)
+	}
+	if got := Estimate(10, 1<<62); got <= 0 {
+		t.Fatalf("a huge max_tokens overflowed the estimate: %d", got)
+	}
+	if got := Estimate(10, -5); got < 0 {
+		t.Fatalf("negative max_tokens: %d", got)
+	}
+}
+
+func TestCoalescerRecordsOncePerSecondPerCaller(t *testing.T) {
+	clk := newClock()
+	c := NewCoalescer(clk.now)
+	rec, sup := c.Allow(team, RPM, "key-a")
+	if !rec || sup != 0 {
+		t.Fatal("first refusal must be recorded")
+	}
+	for i := 0; i < 5; i++ {
+		if rec, _ := c.Allow(team, RPM, "key-a"); rec {
+			t.Fatal("refusal within the second recorded again")
+		}
+	}
+	if rec, _ := c.Allow(team, RPM, "key-b"); !rec {
+		t.Fatal("another caller's refusal was hidden by key-a's")
+	}
+	if rec, _ := c.Allow(team, TPM, "key-a"); !rec {
+		t.Fatal("another limit's refusal was hidden")
+	}
+	clk.advance(time.Second)
+	rec, sup = c.Allow(team, RPM, "key-a")
+	if !rec || sup != 5 {
+		t.Fatalf("after a second: recorded=%v suppressed=%d, want true and 5", rec, sup)
+	}
+}
+
+func TestCoalescerStaysBoundedAndFailsTowardRecording(t *testing.T) {
+	clk := newClock()
+	c := NewCoalescer(clk.now)
+	for i := 0; i < maxCoalesced+500; i++ {
+		rec, _ := c.Allow(team, RPM, string(rune('a'+i%26))+time.Duration(i).String())
+		if !rec {
+			t.Fatalf("a first refusal of caller %d was not recorded", i)
+		}
+	}
+	if len(c.entries) > maxCoalesced {
+		t.Fatalf("%d entries kept, want at most %d", len(c.entries), maxCoalesced)
+	}
+	clk.advance(2 * time.Second)
+	if rec, _ := c.Allow(team, RPM, "late"); !rec {
+		t.Fatal("not recorded")
+	}
+	if len(c.entries) >= maxCoalesced {
+		t.Fatal("stale entries were not swept")
+	}
+}

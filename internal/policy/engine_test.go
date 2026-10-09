@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bredda/tavian/internal/inspect"
+	"github.com/bredda/tavian/internal/quota"
 	"github.com/bredda/tavian/internal/taxonomy"
 )
 
@@ -315,7 +316,15 @@ func TestInvalidPolicies(t *testing.T) {
 		"org with team":         {head + "metadata: { name: x }\nspec: { scope: { organization: true, team: a } }", "cannot be combined"},
 		"user scope":            {head + "metadata: { name: x }\nspec: { scope: { user: bob } }", "scope.user is not supported yet"},
 		"unknown mode":          {head + "metadata: { name: x, mode: loud }\nspec: { scope: { organization: true } }", "mode must be"},
-		"quotas":                {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [] }", "spec.quotas is not supported yet"},
+		"quota budget":          {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: budget_eur, limit: 5 } ] }", "budget_eur is not supported yet"},
+		"quota unknown":         {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: rps, limit: 5 } ] }", "dimension must be one of"},
+		"quota zero":            {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: rpm, limit: 0 } ] }", "limit must be at least 1"},
+		"quota missing limit":   {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: rpm } ] }", "limit must be at least 1"},
+		"quota duplicate":       {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: rpm, limit: 1 }, { dimension: rpm, limit: 2 } ] }", "already limited"},
+		"quota window":          {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: rpm, limit: 1, window: 1h } ] }", "window of rpm is 1m"},
+		"quota window none":     {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: concurrency, limit: 1, window: 1m } ] }", "concurrency has no window"},
+		"quota mode":            {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: rpm, limit: 1, mode: firm } ] }", "mode must be hard or soft"},
+		"quota typo":            {head + "metadata: { name: x }\nspec: { scope: { organization: true }, quotas: [ { dimension: rpm, limit: 1, per: user } ] }", "per"},
 		"audit":                 {head + "metadata: { name: x }\nspec: { scope: { organization: true }, audit: { content: hash } }", "spec.audit is not supported yet"},
 		"response inspection":   {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { response: { mode: observe } } }", "spec.inspection.response is not supported yet"},
 		"rulesets":              {head + "metadata: { name: x }\nspec: { scope: { organization: true }, inspection: { request: { rulesets: [a] } } }", "rulesets is not supported yet"},
@@ -354,8 +363,8 @@ func TestInvalidPolicies(t *testing.T) {
 		t.Errorf("duplicate policy name: %v", err)
 	}
 	// every problem is reported, not only the first
-	_, err := compileErr(head+"metadata: { name: a }\nspec: { scope: {} }", head+"metadata: { name: b }\nspec: { scope: {}, quotas: [] }")
-	if err == nil || strings.Count(err.Error(), "scope is required") != 2 || !strings.Contains(err.Error(), "quotas") {
+	_, err := compileErr(head+"metadata: { name: a }\nspec: { scope: {} }", head+"metadata: { name: b }\nspec: { scope: {}, audit: { content: hash } }")
+	if err == nil || strings.Count(err.Error(), "scope is required") != 2 || !strings.Contains(err.Error(), "spec.audit") {
 		t.Errorf("errors = %v", err)
 	}
 	if _, err := Compile(make([]Source, maxSources+1)); err == nil {
@@ -823,5 +832,61 @@ spec: { scope: { organization: true }, classification: { default: confidential }
 	// phase B uses the policies in force only: an internal backend is fine
 	if err := e.Assert(Identity{}, d, Backend{ID: "local", Class: taxonomy.ClassInternal, Max: taxonomy.Restricted}); err != nil {
 		t.Errorf("a shadow policy leaked into phase B: %v", err)
+	}
+}
+
+func TestLimitsFollowTheScopesThatApply(t *testing.T) {
+	head := "apiVersion: tavian/v1alpha1\nkind: Policy\n"
+	e := compile(t,
+		head+"metadata: { name: org }\nspec:\n  scope: { organization: true }\n  quotas: [ { dimension: rpm, limit: 100 }, { dimension: concurrency, limit: 20 } ]\n",
+		head+"metadata: { name: fin }\nspec:\n  scope: { team: finance }\n  quotas: [ { dimension: tpm, limit: 5000, mode: soft }, { dimension: tokens_per_day, limit: 100000, window: 1d } ]\n",
+		head+"metadata: { name: app }\nspec:\n  scope: { team: finance, application: bot }\n  quotas: [ { dimension: rpm, limit: 5 } ]\n",
+		head+"metadata: { name: trial, mode: shadow }\nspec:\n  scope: { team: finance }\n  quotas: [ { dimension: rpm, limit: 1 } ]\n",
+	)
+	got := e.Limits(Identity{Team: "finance", Application: "bot"})
+	if len(got) != 6 {
+		t.Fatalf("limits = %+v, want the six that apply", got)
+	}
+	byPolicy := map[string]int{}
+	for _, l := range got {
+		byPolicy[l.Policy]++
+		switch l.Policy {
+		case "fin":
+			if l.Dimension == quota.TPM && !l.Soft || l.Dimension == quota.TokensPerDay && l.Soft {
+				t.Errorf("mode lost: %+v", l)
+			}
+			if l.Scope != (quota.Scope{Team: "finance"}) {
+				t.Errorf("scope = %+v", l.Scope)
+			}
+		case "app":
+			if l.Scope != (quota.Scope{Team: "finance", Application: "bot"}) {
+				t.Errorf("scope = %+v", l.Scope)
+			}
+		case "trial":
+			if !l.Shadow || l.Effect() != "shadow" {
+				t.Errorf("a shadow policy's limit must never refuse: %+v", l)
+			}
+		case "org":
+			if l.Scope != (quota.Scope{Organization: true}) {
+				t.Errorf("scope = %+v", l.Scope)
+			}
+		}
+	}
+	if byPolicy["org"] != 2 || byPolicy["fin"] != 2 || byPolicy["app"] != 1 || byPolicy["trial"] != 1 {
+		t.Errorf("by policy = %v", byPolicy)
+	}
+
+	// another team sees only the organization's
+	other := e.Limits(Identity{Team: "research", Application: "bot"})
+	if len(other) != 2 {
+		t.Errorf("research limits = %+v, want only the organization's", other)
+	}
+	// the same team, another application
+	if n := len(e.Limits(Identity{Team: "finance", Application: "other"})); n != 5 {
+		t.Errorf("finance/other limits = %d, want 5", n)
+	}
+	// nothing configured
+	if n := len(compile(t).Limits(Identity{Team: "finance"})); n != 0 {
+		t.Errorf("baseline alone has %d limits", n)
 	}
 }

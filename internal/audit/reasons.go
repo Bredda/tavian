@@ -16,6 +16,7 @@ type Reason struct {
 const (
 	typeInvalid = "invalid_request_error"
 	typeServer  = "server_error"
+	typeRate    = "rate_limit_error"
 )
 
 // The catalogue. Add reasons here only: server code refers to these values and
@@ -33,9 +34,14 @@ var (
 	PolicyError       = Reason{"POLICY_ERROR", "policy_error", http.StatusInternalServerError, typeServer}
 	// PolicyBlocked is a refusal by a block rule. The code a decision record
 	// carries is the rule's own `reason`, when it sets one.
-	PolicyBlocked          = Reason{"POLICY_BLOCKED", "blocked_by_policy", http.StatusForbidden, typeInvalid}
-	RedactionIncomplete    = Reason{"REDACTION_INCOMPLETE", "redaction_incomplete", http.StatusBadRequest, typeInvalid}
-	RedactionFailed        = Reason{"REDACTION_FAILED", "redaction_failed", http.StatusInternalServerError, typeServer}
+	PolicyBlocked       = Reason{"POLICY_BLOCKED", "blocked_by_policy", http.StatusForbidden, typeInvalid}
+	RedactionIncomplete = Reason{"REDACTION_INCOMPLETE", "redaction_incomplete", http.StatusBadRequest, typeInvalid}
+	RedactionFailed     = Reason{"REDACTION_FAILED", "redaction_failed", http.StatusInternalServerError, typeServer}
+	// RateLimited is a limit that clears with time (rpm, tpm, concurrency);
+	// SDKs retry the code. QuotaExceeded is one that does not: the day's
+	// tokens are spent, or a single request is larger than the limit.
+	RateLimited            = Reason{"RATE_LIMITED", "rate_limit_exceeded", http.StatusTooManyRequests, typeRate}
+	QuotaExceeded          = Reason{"QUOTA_EXCEEDED", "quota_exceeded", http.StatusTooManyRequests, typeRate}
 	MultimodalNotInspected = Reason{"MULTIMODAL_NOT_INSPECTABLE", "multimodal_not_inspectable", http.StatusBadRequest, typeInvalid}
 	RequestTooComplex      = Reason{"REQUEST_TOO_COMPLEX", "request_too_complex", http.StatusBadRequest, typeInvalid}
 	InspectionFailed       = Reason{"INSPECTION_FAILED", "inspection_failed", http.StatusServiceUnavailable, typeServer}
@@ -51,7 +57,7 @@ var (
 // All lists the catalogue, for documentation and tests.
 func All() []Reason {
 	return []Reason{
-		Served, InvalidRequest, RequestTooLarge, ModelNotAllowed, ClearanceExceeded, ModelNotFound, NoEligibleBackend, RoutingAssertion, PolicyError, PolicyBlocked, RedactionIncomplete, RedactionFailed, MultimodalNotInspected,
+		Served, InvalidRequest, RequestTooLarge, ModelNotAllowed, ClearanceExceeded, ModelNotFound, NoEligibleBackend, RoutingAssertion, PolicyError, PolicyBlocked, RedactionIncomplete, RedactionFailed, RateLimited, QuotaExceeded, MultimodalNotInspected,
 		RequestTooComplex, InspectionFailed, UpstreamUnavailable, UpstreamError, StreamInterrupted, ClientDisconnected,
 	}
 }

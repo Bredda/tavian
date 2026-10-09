@@ -29,6 +29,9 @@ type Metrics struct {
 	findings    *prometheus.CounterVec
 	inspectTime prometheus.Histogram
 
+	quotaExceeded *prometheus.CounterVec
+	quotaEstimate prometheus.Histogram
+
 	eventsLost prometheus.Counter
 }
 
@@ -75,6 +78,15 @@ func NewMetrics() *Metrics {
 			Help:    "Time spent inspecting a request.",
 			Buckets: []float64{.0001, .0005, .001, .0025, .005, .01, .025, .05, .1},
 		}),
+		quotaExceeded: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_quota_exceeded_total",
+			Help: "Requests that went over a quota, by dimension, scope kind and effect (refused|soft|shadow). Every refusal is counted, recorded or not.",
+		}, []string{"dimension", "scope", "effect"}),
+		quotaEstimate: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "tavian_quota_estimate_ratio",
+			Help:    "Tokens a request really used divided by the tokens reserved for it. Above 1 the estimate was too low.",
+			Buckets: []float64{.01, .05, .1, .25, .5, .75, 1, 1.5, 2},
+		}),
 		eventsLost: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "tavian_usage_events_lost_total",
 			Help: "Usage events that could be neither stored nor spooled. Any increase is an audit gap.",
@@ -84,7 +96,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
-		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow,
+		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate,
 	)
 	return m
 }
