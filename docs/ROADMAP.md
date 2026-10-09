@@ -9,7 +9,7 @@ Security-relevant foundations (config snapshots, decision records, the multi-dim
 **This page says what each milestone is for. What is left to do, what is in progress and what has been decided lives on GitHub**, so that there is one place to look:
 
 - [Issues and milestones](https://github.com/Bredda/tavian/milestones): one milestone per milestone below, `epic` issues with task lists, `decision` issues for open questions.
-- [Project board](https://github.com/users/Bredda/projects): status, priority and size.
+- [Project board](https://github.com/users/Bredda/projects/7): status, priority and size.
 - [Releases](https://github.com/Bredda/tavian/releases) and the [changelog](../CHANGELOG.md): what shipped.
 - [Architecture decision records](adr/README.md): what was decided and why.
 
