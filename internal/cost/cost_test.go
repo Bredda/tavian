@@ -100,6 +100,7 @@ func TestValidate(t *testing.T) {
 	for name, p := range map[string]Price{
 		"negative input": {Input: -1}, "nan": {Output: math.NaN()}, "inf": {Input: math.Inf(1)},
 		"huge": {Output: 1e9}, "bad cached": {CachedInput: f(-2)},
+		"just over the bound": {Input: maxPrice + 1}, "cached just over": {CachedInput: f(maxPrice + 1)},
 	} {
 		if p.Validate() == nil {
 			t.Errorf("price %s accepted", name)
@@ -107,6 +108,9 @@ func TestValidate(t *testing.T) {
 	}
 	if err := (Price{Input: 0, Output: 0}).Validate(); err != nil {
 		t.Errorf("a free model: %v", err)
+	}
+	if err := (Price{Input: maxPrice, Output: maxPrice, CachedInput: f(maxPrice)}).Validate(); err != nil {
+		t.Errorf("a price at the bound: %v", err)
 	}
 	ok := Energy{WhPer1KInput: 1, WhPer1KOutput: 2, Method: MethodBenchmark, Confidence: ConfidenceMedium}
 	if err := ok.Validate(); err != nil {
