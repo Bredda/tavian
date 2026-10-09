@@ -83,6 +83,23 @@ services:
     security_opt: ["no-new-privileges:true"]
     restart: "no"
 
+  # One-shot: makes the key that signs the seals of the audit chain, once. It
+  # prints the public key (`docker compose run --rm audit-key`). Demo only: a
+  # real deployment keeps this key away from the people who can edit the database.
+  audit-key:
+    build:
+      context: ../..
+      args: { CMD: tavian }
+    image: tavian:dev
+    command: ["audit-keygen", "-out", "/var/lib/tavian/keys/audit.key", "-if-missing"]
+    volumes:
+      - auditkey:/var/lib/tavian/keys
+    networks: [backplane]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
+
   tavian:
     build:
       context: ../..
@@ -94,6 +111,7 @@ services:
       - ./tavian.yaml:/etc/tavian/tavian.yaml:ro
       - ./policies:/etc/tavian/policies:ro
       - spool:/var/lib/tavian/spool
+      - auditkey:/var/lib/tavian/keys:ro
     ports:
       - "127.0.0.1:8080:8080" # data plane (OpenAI-compatible API)
       - "127.0.0.1:9090:9090" # admin: /healthz /readyz /metrics
@@ -102,6 +120,7 @@ services:
       mockllm: { condition: service_started }
       mockllm-external: { condition: service_started }
       migrate: { condition: service_completed_successfully }
+      audit-key: { condition: service_completed_successfully }
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -134,6 +153,7 @@ services:
 volumes:
   pgdata: {}
   spool: {}
+  auditkey: {}
 
 networks:
   backplane:

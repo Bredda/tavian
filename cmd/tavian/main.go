@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/bredda/tavian/internal/auth"
+	"github.com/bredda/tavian/internal/chain"
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/egress"
 	"github.com/bredda/tavian/internal/meter"
+	"github.com/bredda/tavian/internal/outbox"
 	"github.com/bredda/tavian/internal/provider/openai"
 	"github.com/bredda/tavian/internal/server"
 	"github.com/bredda/tavian/internal/spool"
@@ -35,6 +37,8 @@ Commands:
   migrate    Apply pending database migrations and exit
   policy     Test policies against fixtures: tavian policy test
   keygen     Generate an API key and the hash to put in the configuration
+  audit-keygen  Generate the key that signs the seals of the audit chain
+  verify-audit  Check the audit chain, its seals and the records it covers
   version    Print the version
 
 Run "tavian <command> -h" for command flags.
@@ -58,6 +62,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdPolicy(args[1:], stdout, stderr)
 	case "keygen":
 		return cmdKeygen(stdout, stderr)
+	case "audit-keygen":
+		return cmdAuditKeygen(args[1:], stdout, stderr)
+	case "verify-audit":
+		return cmdVerifyAudit(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "tavian", version.String())
 		return 0
@@ -202,10 +210,14 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		flushed = make(chan struct{})
 
 		stopFlush = func() {}
+		// the outbox consumers run until the servers are drained
+		stopWorkers = func() {}
+		workersDone = make(chan struct{})
 	)
 	if cfg.Database.URLEnv == "" {
 		log.Warn("no database configured: usage events are only logged, not stored (development mode)")
 		close(flushed)
+		close(workersDone)
 	} else {
 		var outbox *meter.OutboxSink
 		st, outbox, err = openStorage(ctx, cfg.Database, guard, snap, raw, log)
@@ -225,6 +237,14 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 			defer close(flushed)
 			outbox.Run(flushCtx)
 		}()
+
+		var workersCtx context.Context
+		workersCtx, stopWorkers = context.WithCancel(context.Background())
+		defer stopWorkers()
+		if err := startWorkers(workersCtx, cfg, st, metrics, log, workersDone); err != nil {
+			log.Error("outbox workers", "error", err)
+			return 1
+		}
 	}
 
 	if cfg.OIDC.Issuer != "" {
@@ -302,7 +322,39 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	// Requests are done: stop the replay loop and let it empty the spool once.
 	stopFlush()
 	<-flushed
+	stopWorkers()
+	<-workersDone
 	return code
+}
+
+// startWorkers runs the consumers of the outbox: today the one that chains and
+// seals decision records. done is closed when they have stopped.
+func startWorkers(ctx context.Context, cfg *config.Config, st *store.Store, metrics *server.Metrics, log *slog.Logger, done chan struct{}) error {
+	sealer := &chain.Sealer{SealEveryEvents: cfg.Audit.SealEveryEvents, SealEvery: cfg.Audit.SealEvery}
+	if k := cfg.Audit.SigningKeyFile; k != "" {
+		signer, err := chain.LoadSigner(k)
+		if err != nil {
+			return err
+		}
+		sealer.Signer = signer
+		log.Info("audit chain will be sealed", "key_id", signer.KeyID(), "every_events", cfg.Audit.SealEveryEvents, "every", cfg.Audit.SealEvery)
+	} else {
+		log.Warn("audit.signing_key_file is not set: decision records are chained but the chain is not sealed, so whoever can write to the database could rewrite it undetected (see `tavian audit-keygen`)")
+	}
+	runner := &outbox.Runner{
+		Pool: st.Pool(), Log: log, PollEvery: cfg.Workers.PollInterval, BatchSize: cfg.Workers.BatchSize,
+		OnCycle: metrics.ObserveConsumer,
+	}
+	runner.Add(sealer)
+	if err := runner.Register(ctx); err != nil {
+		return err
+	}
+	metrics.WatchAudit(sealer.Stats, time.Now)
+	go func() {
+		defer close(done)
+		runner.Run(ctx)
+	}()
+	return nil
 }
 
 // openStore connects to PostgreSQL through an egress guard of its own; used by
@@ -377,6 +429,9 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 	}
 	if err == nil && cfg.Database != running.Database {
 		err = errors.New("database settings changed: restart required")
+	}
+	if err == nil && (cfg.Audit != running.Audit || cfg.Workers != running.Workers) {
+		err = errors.New("audit or workers settings changed: restart required")
 	}
 	if err == nil && !sameOIDCConnection(cfg.OIDC, running.OIDC) {
 		err = errors.New("oidc settings other than mappings changed: restart required")

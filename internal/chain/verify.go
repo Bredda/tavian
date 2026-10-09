@@ -160,7 +160,7 @@ func Verify(ctx context.Context, pool *pgxpool.Pool, opt Options) (*Report, erro
 		rep.Warnings = append(rep.Warnings, "seal signatures were not checked (no public key given): the chain is checked against itself only")
 	}
 	if len(seals) == 0 {
-		rep.Warnings = append(rep.Warnings, "there are no seals: nothing anchors the chain (set audit.signing_key_file)")
+		rep.Warnings = append(rep.Warnings, "there are no seals yet: nothing anchors the chain (seals need audit.signing_key_file and are made every audit.seal_every_events entries or audit.seal_every)")
 	}
 	return rep, nil
 }

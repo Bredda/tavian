@@ -14,6 +14,12 @@ log:
 database:
   url_env: TAVIAN_DATABASE_URL
 
+# Decision records are chained, and the chain is sealed with a signature every 100
+# records or 5 minutes (the key is made by the audit-key service of the compose file).
+audit:
+  signing_key_file: /var/lib/tavian/keys/audit.key
+  seal_every_events: 100
+
 # Policies: see policies/demo.yaml (mounted next to this file by the compose file).
 policy:
   dir: policies
