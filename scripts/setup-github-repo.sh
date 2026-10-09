@@ -30,7 +30,7 @@ gh api -X PUT "repos/${repo}/branches/main/protection" --input - >/dev/null <<'J
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["pr-title", "lint", "test", "build", "docker", "workflows", "conformance", "demo"]
+    "contexts": ["pr-title", "lint", "test", "build", "docker", "workflows", "conformance", "demo", "dco"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": { "required_approving_review_count": 0 },

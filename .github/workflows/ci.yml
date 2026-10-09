@@ -39,6 +39,32 @@ jobs:
           subjectPattern: ^(?![A-Z]).+$
           subjectPatternError: The subject "{subject}" must not start with an uppercase letter.
 
+  # Developer Certificate of Origin (ADR-0014): every commit of the pull request
+  # is signed off. Dependabot and release-please make commits without anyone to
+  # certify them; they are exempt when the pull request comes from a branch of
+  # this repository (a fork cannot claim the exemption).
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the sign-off of every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          if [ "$FROM_FORK" = false ] && { [ "$AUTHOR" = "dependabot[bot]" ] || [[ "$HEAD_REF" == release-please--* ]]; }; then
+            echo "Pull request made by tooling: exempt"
+            exit 0
+          fi
+          scripts/check-dco.sh "$BASE" "$HEAD"
+
   lint:
     runs-on: ubuntu-latest
     steps:
