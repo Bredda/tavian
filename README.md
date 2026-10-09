@@ -51,6 +51,13 @@ docker compose -f deploy/compose/docker-compose.yml exec postgres psql -U tavian
   "select payload->>'reason_code' as reason, payload->>'label' as label, payload->'redactions' as redactions, payload->'shadow'->>'would_refuse' as shadow_would_refuse from outbox where kind='decision' order by seq"
 ```
 
+Every served request is priced from the prices in the configuration (the demo's are examples), and its energy and carbon are estimated; the cost sits in the decision record and the usage event:
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml exec postgres psql -U tavian -d tavian -c \
+  "select payload->>'model' as model, payload->>'backend' as backend, payload->>'cost_micro_eur' as micro_eur, payload->>'energy_wh' as wh, payload->>'co2e_g' as g_co2e from outbox where kind='usage' order by seq"
+```
+
 Every answer carries an `X-Tavian-Decision-Id` header, and the decision record in PostgreSQL (`outbox`, kind `decision`) says why. The records are also linked into a hash chain, sealed with a signature every 100 records or 5 minutes; check it with the public key of the demo (`docker compose run --rm audit-key` prints it):
 
 ```bash
@@ -72,7 +79,7 @@ Keycloak takes about 30 seconds to start; the gateway retries fetching its signi
 
 ## What works today (main, after v0.1.0)
 
-API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection looks for PII (e-mail, IBAN, payment cards, French NIR, phone, IPv4), secrets and your own dictionaries and patterns in everything a request carries, fails closed, and records findings (never the matched text) in the usage event; it observes only for now. Quotas (requests, concurrency and tokens, set in policies) answer 429 with `Retry-After`. Decision records are chained and sealed, and `tavian verify-audit` checks them ([docs/AUDIT.md](docs/AUDIT.md)). See the [roadmap](docs/ROADMAP.md) and [docs/INSPECTION.md](docs/INSPECTION.md).
+API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection looks for PII (e-mail, IBAN, payment cards, French NIR, phone, IPv4), secrets and your own dictionaries and patterns in everything a request carries, fails closed, and records findings (never the matched text) in the usage event; it observes only for now. Quotas (requests, concurrency and tokens, set in policies) answer 429 with `Retry-After`. Decision records are chained and sealed, and `tavian verify-audit` checks them ([docs/AUDIT.md](docs/AUDIT.md)). Requests are priced from the prices you configure, with energy and carbon estimated from profiles and intensities you enter (labelled as estimates), and a monthly `budget_eur` quota can cap the spending ([docs/QUOTAS_AND_METERING.md](docs/QUOTAS_AND_METERING.md)). See the [roadmap](docs/ROADMAP.md) and [docs/INSPECTION.md](docs/INSPECTION.md).
 
 ## Development
 

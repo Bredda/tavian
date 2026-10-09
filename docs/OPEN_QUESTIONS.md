@@ -30,8 +30,8 @@ _Status: living document. Items marked **[blocking]** should be settled before M
 
 ## Metering and environment
 
-17. **Energy data sources.** Which public benchmarks or methodologies to base default Wh/token profiles on, with what disclosed uncertainty. How to ingest local GPU power telemetry in an air-gapped setup.
-18. **Carbon accounting scope.** Operational electricity only, or also embodied/amortized hardware? Start with operational only and say so.
+17. **Energy data sources.** *Provisional, 2026-10:* the operator enters Wh per thousand tokens per route target with a declared method and confidence; Tavian ships no default figures and claims no source ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#cost-energy-and-carbon-in-main)). Still open: which public benchmarks or methodologies to base default Wh/token profiles on, with what disclosed uncertainty or methodologies to base default Wh/token profiles on, with what disclosed uncertainty. How to ingest local GPU power telemetry in an air-gapped setup.
+18. **Carbon accounting scope.** *Provisional, 2026-10:* operational electricity only, intensity entered by the operator per region, said so in the docs. Embodied/amortized hardware: later, if at all.
 
 ## API
 

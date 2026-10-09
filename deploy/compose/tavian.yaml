@@ -36,12 +36,20 @@ oidc:
       team: research
       allowed_models: ["demo-*"]
 
+# Carbon intensity of the electricity where the backends run (gCO2e per kWh),
+# entered by the operator. The figures here are examples, not data.
+carbon:
+  regions:
+    fr-onprem: 55
+    eu-partner: 250
+
 backends:
   # The on-prem backend.
   - id: mockllm
     type: openai
     base_url: http://mockllm:8000/v1
     destination_class: internal
+    region: fr-onprem
   # Stands for an approved external provider: it may receive data up to
   # `internal` and nothing more sensitive (max_classification defaults to that
   # for this class). In this demo it is another mock on the same private network.
@@ -49,6 +57,7 @@ backends:
     type: openai
     base_url: http://mockllm-external:8000/v1
     destination_class: approved-external
+    region: eu-partner
 
 models:
   - name: demo-chat
@@ -56,6 +65,8 @@ models:
     route:
       - backend: mockllm
         upstream_model: mock
+        price: { input: 0.10, output: 0.30 }   # EUR per million tokens: what the GPUs cost
+        energy: { wh_per_1k_input_tokens: 0.2, wh_per_1k_output_tokens: 1.0, method: estimated, confidence: low }
   # Served by both: the external provider is preferred, but data that is
   # `confidential` or above only ever goes to the on-prem backend.
   - name: demo-shared
@@ -63,14 +74,20 @@ models:
     route:
       - backend: partner-eu
         upstream_model: mock
+        price: { input: 1.00, output: 3.00 }
+        energy: { wh_per_1k_input_tokens: 0.3, wh_per_1k_output_tokens: 1.5, method: estimated, confidence: low }
       - backend: mockllm
         upstream_model: mock
+        price: { input: 0.10, output: 0.30 }   # EUR per million tokens: what the GPUs cost
+        energy: { wh_per_1k_input_tokens: 0.2, wh_per_1k_output_tokens: 1.0, method: estimated, confidence: low }
   # Only available externally: refused for sensitive data.
   - name: demo-partner
     type: chat
     route:
       - backend: partner-eu
         upstream_model: mock
+        price: { input: 1.00, output: 3.00 }
+        energy: { wh_per_1k_input_tokens: 0.3, wh_per_1k_output_tokens: 1.5, method: estimated, confidence: low }
 
 api_keys:
   - id: demo

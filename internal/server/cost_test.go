@@ -164,7 +164,7 @@ func TestTheMonthlyBudgetRunsOutAfterWhatWasReallySpent(t *testing.T) {
 		t.Fatalf("served %d requests, then status %d", served, last.StatusCode)
 	}
 	e := readError(t, last)
-	if e.Code != "quota_exceeded" || !strings.Contains(e.Message, "euros per month") || !strings.Contains(e.Message, "10") {
+	if e.Code != "quota_exceeded" || !strings.Contains(e.Message, "limit of 10 euros per month") {
 		t.Errorf("error = %+v: SDKs must not retry an empty month, and the limit is in euros", e)
 	}
 	if got := last.Header.Get("Retry-After"); got != "1857600" { // 10 March 12:00 to 1 April 00:00 = 21.5 days

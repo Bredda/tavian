@@ -20,7 +20,7 @@ The **built-in baseline** is itself a policy in this format (`internal/policy/ba
 | `spec.inspection.on_error` | `block` only (the default): a request that cannot be inspected is always refused |
 | `metadata.mode` | `enforce` (default) or `shadow`: see below |
 | `spec.inspection.response`, `spec.inspection.request.rulesets` | not yet: refused at load with a message (response: M4; detectors are configured under `inspection:` in `tavian.yaml`) |
-| `spec.quotas` | implemented: `{dimension, limit, window?, mode?}` for `rpm`, `concurrency`, `tpm`, `tokens_per_day` (see [Quotas](#quotas)); `budget_eur` arrives with prices (M2 step 2.7) |
+| `spec.quotas` | implemented: `{dimension, limit, window?, mode?}` for `rpm`, `concurrency`, `tpm`, `tokens_per_day`, `budget_eur` (see [Quotas](#quotas)) |
 | `spec.audit` | not yet: refused at load (audit settings: M2 step 2.6 and M4) |
 
 ### Quotas
@@ -33,6 +33,7 @@ spec:
     - { dimension: concurrency, limit: 10 }           # requests being served
     - { dimension: tpm, limit: 200000, mode: soft }   # tokens in the last minute
     - { dimension: tokens_per_day, limit: 5000000 }   # tokens since 00:00 UTC
+    - { dimension: budget_eur, limit: 500 }           # euros since the 1st of the month, UTC (needs prices)
 ```
 
 The limit belongs to the scope of the policy: `scope: { team: finance }` with `rpm: 120` is 120 requests a minute for the whole team, shared by its keys and users. Every quota of every applicable policy must pass. `mode` is `hard` (default, refuses with 429) or `soft` (counts and reports, never refuses); a policy in `shadow` mode behaves like `soft` for all of its quotas. A dimension can appear once per policy, and its window is fixed (`window` is optional and refused if it differs). How they are counted, estimated and recorded: [QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#in-main). `tavian policy test` does not exercise quotas: they depend on what was used before.

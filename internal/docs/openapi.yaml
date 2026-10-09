@@ -406,8 +406,8 @@ components:
       description: |
         A quota set by a policy is reached. The code is `rate_limit_exceeded`
         for requests per minute, tokens per minute and concurrency (retry after
-        `Retry-After`), and `quota_exceeded` when the day's tokens are spent or
-        when the request alone is larger than the limit (retrying will not
+        `Retry-After`), and `quota_exceeded` when the day's tokens or the
+        month's budget are spent or when the request alone is larger than the limit (retrying will not
         help, and there is no `Retry-After`). The message names the limit and
         the kind of scope. `decision_id` and `X-Tavian-Decision-Id` are
         present unless this caller's refusals are being recorded less often

@@ -82,7 +82,7 @@ Usage events and audit records are written to an **outbox table in PostgreSQL** 
                        first allowed target of the route); health, capabilities,
                        context window and strategies: M3
 10  policy (phase B) assertion: chosen backend satisfies constraints (defence in depth, built)
-11  quota reserve    TPM / tokens-per-day reservation using estimated usage (built); budget: 2.7
+11  quota reserve    TPM / tokens-per-day / budget reservation using estimated usage and the chosen backend's price (built)
 12  call provider    through the egress guard (internal backends use the same dialer path)
 13  relay response   stream pass-through; response inspection per policy (see below)
 14  quota settle     replace the reservation with actual usage (refund the difference; built)
@@ -179,6 +179,7 @@ internal/inspect/          ✓ detectors, findings, fail-closed engine (classifi
 internal/policy/           ✓ YAML + CEL evaluation, baseline policy, scopes, actions on findings, shadow mode
 internal/pipeline/         ✓ the decision steps (model authorization, policy, clearance, routing, phase B) shared by the gateway and `policy test`
 internal/quota/            ✓ admission, reserve/settle, in-memory counters, refusal coalescing (shared counters: M3)
+internal/cost/             ✓ prices, energy profiles, carbon: cost of a request
 internal/audit/            ✓ decision records and reason codes (encryption: M4)
 internal/outbox/           ✓ consumers of the outbox: cursors, one runner per consumer, xid horizon; the pruner (retention)
 internal/rollup/           ✓ hourly usage sums (usage_hourly) and the rebuild of daily token counters

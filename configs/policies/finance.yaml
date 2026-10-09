@@ -46,3 +46,6 @@ spec:
     - { dimension: concurrency, limit: 10 }
     - { dimension: tpm, limit: 200000, mode: soft }
     - { dimension: tokens_per_day, limit: 5000000 }
+    # Whole euros per calendar month (UTC), at the prices of the backends that
+    # served the requests. Models without a price use none (`tavian validate` warns).
+    - { dimension: budget_eur, limit: 500 }

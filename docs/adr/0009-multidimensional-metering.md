@@ -14,6 +14,10 @@ Every `UsageEvent` carries tokens (in/out/cached/reasoning), cost € (from a pr
 - We must document the methodology and its uncertainty, and avoid false precision.
 - Operators supply carbon intensity; no external data fetch (air-gapped).
 
+## Implementation notes (2026-10)
+- Prices and energy profiles are set per route target (backend x upstream model), the carbon intensity per backend region. A usage event stores the figures it was computed from (`cost_basis`); the configuration revision it carries resolves the rest. Nothing is invented: a figure is absent when its inputs are.
+- The decision record of a served request also carries the cost, so it is covered by the audit chain. Energy and carbon quotas are not built.
+
 ## Alternatives considered
 - Add environmental metrics later — loses history, forces a schema migration on a hot, large table.
 - Cost-only metering — misses a differentiating capability.
