@@ -36,7 +36,7 @@ The work is tracked on GitHub, not in the repository:
 
 1. Branch from `main` with a short-lived branch named `<type>/<short-description>` (`feat/oidc-auth`, `fix/stream-usage`). Keep it to a few days at most; split large work into independently mergeable steps and hide unfinished behaviour behind configuration rather than a long-lived branch.
 2. Open a pull request. **The PR title is the commit message** (we squash-merge) and must follow [Conventional Commits](https://www.conventionalcommits.org): `type(scope): subject`. CI checks it.
-3. CI must be green (`pr-title`, `lint`, `test`, `build`, `docker`, `workflows`, `conformance`, `demo`). Squash-merge; the branch is deleted.
+3. Sign off every commit (`git commit -s`, see [Sign-off](#sign-off-dco)). CI must be green (`pr-title`, `lint`, `test`, `build`, `docker`, `workflows`, `conformance`, `demo`, `dco`). Squash-merge; the branch is deleted.
 
 Commit types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `revert`. Scope is optional, typically a package (`auth`, `config`, `egress`, `server`, `provider`, `policy`, …). The subject is lowercase, imperative, no trailing period. Mark breaking changes with `!` (`feat(config)!: rename listen.data`) and explain them in the PR description.
 
@@ -71,4 +71,12 @@ Do not open a public issue; see [.github/SECURITY.md](.github/SECURITY.md).
 
 ## Licence
 
-By contributing you agree that your contribution is licensed under Apache-2.0 ([ADR-0011](docs/adr/0011-apache-2-licence.md)). A DCO sign-off requirement may be added later.
+By contributing you agree that your contribution is licensed under Apache-2.0 ([ADR-0011](docs/adr/0011-apache-2-licence.md)); you keep your copyright, there is no CLA.
+
+### Sign-off (DCO)
+
+Every commit carries a `Signed-off-by: Name <email>` line, which certifies the [Developer Certificate of Origin](https://developercertificate.org) ([ADR-0014](docs/adr/0014-dco-sign-off.md)): you wrote the change or have the right to submit it under the project's licence. Add it with `git commit -s`; for commits already made, `git rebase --signoff origin/main` then `git push --force-with-lease`. The email must be that of the commit's author or committer. The `dco` job runs `scripts/check-dco.sh` on every pull request; commits made by Dependabot and release-please are exempt. The maintainer signs off like everyone else.
+
+### Go version
+
+Tavian is built and tested with the latest stable Go release only ([ADR-0015](docs/adr/0015-go-version-policy.md)): `go.mod`, the CI and the Dockerfile move together within a month of a new release.

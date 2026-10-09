@@ -12,6 +12,7 @@ Closes #
 
 ## Checklist
 
+- [ ] Commits are signed off (`git commit -s`, see CONTRIBUTING.md)
 - [ ] Tests added or updated; `make test` passes
 - [ ] No request or response content (prompts, completions, keys) is logged, traced or used as a metric label
 - [ ] Docs updated (and an ADR added if this changes a significant decision)

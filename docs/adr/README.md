@@ -17,6 +17,8 @@ Each ADR captures one significant decision: context, decision, consequences. Sta
 | [0011](0011-apache-2-licence.md) | Apache-2.0 licence | Accepted |
 | [0012](0012-ml-detectors-as-local-sidecar.md) | ML detectors run as an optional local sidecar | Accepted |
 | [0013](0013-trunk-based-development-and-release-please.md) | Trunk-based development with Conventional Commits and release-please | Accepted |
+| [0014](0014-dco-sign-off.md) | Developer Certificate of Origin for contributions | Accepted |
+| [0015](0015-go-version-policy.md) | Go version policy: the latest stable release | Accepted |
 
 ## Template
 
