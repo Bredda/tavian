@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net"
+	neturl "net/url"
 	"os"
 	"strings"
 	"sync"
@@ -31,10 +34,26 @@ func testStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
-	if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+	// a schema of its own, so that packages sharing the test database can run
+	// in parallel (see internal/store/storetest)
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	schema := "t_" + hex.EncodeToString(b[:])
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA `+schema); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA `+schema+` CASCADE`)
+		pool.Close()
+	})
+	u, err := neturl.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	url = u.String()
 	s, err := Open(ctx, url, (&net.Dialer{}).DialContext)
 	if err != nil {
 		t.Fatal(err)

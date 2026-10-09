@@ -79,6 +79,11 @@ func Open(ctx context.Context, url string, dial DialFunc) (*Store, error) {
 	return s, nil
 }
 
+// Pool is the connection pool, for the packages that own tables of their own
+// (outbox consumers, the audit chain) and run their queries and transactions
+// themselves. The data plane never uses it on the request path.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 // Close releases the pool.
 func (s *Store) Close() { s.pool.Close() }
 
