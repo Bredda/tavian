@@ -534,6 +534,10 @@ func TestPrunedRecordsAreAcceptedOnlyWhenAsked(t *testing.T) {
 	if e.verify(Options{}).OK() {
 		t.Fatal("missing records are a problem by default")
 	}
+	if rep := e.verify(Options{AllowPruned: true}); rep.OK() || !strings.Contains(problems(rep), "accounts for") {
+		t.Fatalf("records removed without a retention log entry were accepted: %s", problems(rep))
+	}
+	e.exec(`INSERT INTO outbox_prunes (kind, rows, through_position) VALUES ('decision', 3, 3)`)
 	rep := e.verify(Options{AllowPruned: true})
 	if !rep.OK() || rep.Pruned != 3 {
 		t.Fatalf("%s (%d pruned)", problems(rep), rep.Pruned)
@@ -576,5 +580,80 @@ func TestAnchorsDetectASealChangedInTheDatabase(t *testing.T) {
 	}
 	if rep.OK() || !strings.Contains(problems(rep), "differs from the copy") {
 		t.Fatalf("problems = %s", problems(rep))
+	}
+}
+
+func (e *env) retain(keep time.Duration) map[string]int64 {
+	e.t.Helper()
+	e.exec(`UPDATE outbox SET recorded_at = now() - interval '10 days'`)
+	p := &outbox.Pruner{Pool: e.st.Pool(), Log: slog.New(slog.DiscardHandler), Keep: map[string]time.Duration{"decision": keep}}
+	n, err := p.Once(context.Background())
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return n
+}
+
+func TestRetentionLeavesAChainThatStillVerifies(t *testing.T) {
+	e := newEnv(t, true)
+	e.twoSeals()
+	e.decisions(2, "late") // chained, not sealed
+	e.chained(14)
+	removed := e.retain(24 * time.Hour)
+	if removed["decision"] != 12 {
+		t.Fatalf("removed %v, want the 12 sealed records and not the 2 unsealed ones", removed)
+	}
+	if rep := e.verify(Options{}); rep.OK() {
+		t.Fatal("missing records are a problem unless pruning is accepted")
+	}
+	rep := e.verify(Options{AllowPruned: true})
+	if !rep.OK() || rep.Pruned != 12 || rep.Entries != 14 {
+		t.Fatalf("%s (pruned %d, %d entries)", problems(rep), rep.Pruned, rep.Entries)
+	}
+	// a record removed outside retention is not accounted for
+	e.exec(`DELETE FROM outbox WHERE event_id = 'late-0'`)
+	rep = e.verify(Options{AllowPruned: true})
+	if rep.OK() {
+		t.Fatal("a record missing from the unsealed part was accepted")
+	}
+}
+
+func TestARecordRemovedBesidesRetentionIsFound(t *testing.T) {
+	e := newEnv(t, true)
+	e.twoSeals()
+	if n := e.retain(24 * time.Hour); n["decision"] != 12 {
+		t.Fatalf("removed %v", n)
+	}
+	// everything is pruned and accounted for; now someone removes a log entry
+	e.exec(`UPDATE outbox_prunes SET rows = rows - 1`)
+	rep := e.verify(Options{AllowPruned: true})
+	if rep.OK() || !strings.Contains(problems(rep), "accounts for") {
+		t.Fatalf("problems = %s", problems(rep))
+	}
+	// the other way round: the log claims more than is missing
+	e.exec(`UPDATE outbox_prunes SET rows = rows + 5`)
+	rep = e.verify(Options{AllowPruned: true})
+	if !rep.OK() || !strings.Contains(strings.Join(rep.Warnings, "|"), "retention log says") {
+		t.Fatalf("%s %v", problems(rep), rep.Warnings)
+	}
+}
+
+func TestStartingAtASealSkipsTheRetentionCheck(t *testing.T) {
+	e := newEnv(t, true)
+	e.twoSeals()
+	e.retain(24 * time.Hour)
+	rep := e.verify(Options{AllowPruned: true, FromSeal: 1})
+	if !rep.OK() || !strings.Contains(strings.Join(rep.Warnings, "|"), "walk started at a seal") {
+		t.Fatalf("%s %v", problems(rep), rep.Warnings)
+	}
+}
+
+func TestRetentionIsMentionedWhenNotAccepted(t *testing.T) {
+	e := newEnv(t, true)
+	e.twoSeals()
+	e.retain(24 * time.Hour)
+	rep := e.verify(Options{})
+	if !strings.Contains(strings.Join(rep.Warnings, "|"), "-allow-pruned") {
+		t.Fatalf("warnings = %v", rep.Warnings)
 	}
 }
