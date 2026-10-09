@@ -121,16 +121,24 @@ func TestAdmitIsAllOrNothing(t *testing.T) {
 
 func TestTwoPoliciesOnOneCounterCountOnce(t *testing.T) {
 	s := NewStore(nil)
-	a := Limit{Policy: "a", Scope: team, Dimension: RPM, Max: 10}
-	b := Limit{Policy: "b", Scope: team, Dimension: RPM, Max: 2}
-	limits := []Limit{a, b}
-	s.Admit(limits)
-	s.Admit(limits)
-	if _, res := s.Admit(limits); !res.Refused {
-		t.Fatal("two requests were counted as four, or b was ignored")
+	a := Limit{Policy: "a", Scope: team, Dimension: RPM, Max: 3}
+	b := Limit{Policy: "b", Scope: team, Dimension: RPM, Max: 10}
+	s.Admit([]Limit{a, b})
+	s.Admit([]Limit{a, b})
+	// two requests counted once each: the third fits under a's 3
+	if _, res := s.Admit([]Limit{a}); res.Refused {
+		t.Fatal("a request was counted once per policy that limits it (admit)")
 	}
-	if res := func() Result { _, r := s.Admit([]Limit{a}); return r }(); res.Refused {
-		t.Fatal("limit a, at 10, refused after two requests: the counter was incremented twice per request")
+
+	tp := Limit{Policy: "a", Scope: team, Dimension: TPM, Max: 300}
+	td := Limit{Policy: "b", Scope: team, Dimension: TPM, Max: 10000}
+	s.Reserve([]Limit{tp, td}, 100)
+	s.Reserve([]Limit{tp, td}, 100)
+	if _, res := s.Reserve([]Limit{tp}, 100); res.Refused {
+		t.Fatal("tokens were counted once per policy that limits them (reserve)")
+	}
+	if _, res := s.Reserve([]Limit{tp}, 1); !res.Refused {
+		t.Fatal("tokens were not counted")
 	}
 }
 
