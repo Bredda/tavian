@@ -26,7 +26,7 @@ test-db: ## Run the tests including PostgreSQL integration (starts a throwaway c
 	-docker rm -f tavian-test-pg >/dev/null 2>&1
 	docker run -d --rm --name tavian-test-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=tavian -p 127.0.0.1:55432:5432 postgres:17-alpine >/dev/null
 	@until docker exec tavian-test-pg pg_isready -U postgres -d tavian >/dev/null 2>&1; do sleep 0.5; done
-	TAVIAN_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/tavian go test -race -count=1 ./... ; status=$$?; docker rm -f tavian-test-pg >/dev/null; exit $$status
+	TAVIAN_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55432/tavian sh -c 'go test -race -count=1 ./... && go test -tags e2e -race -count=1 ./e2e' ; status=$$?; docker rm -f tavian-test-pg >/dev/null; exit $$status
 
 .PHONY: policy-test
 policy-test: ## Run the example policy fixtures through the gateway's decision code
@@ -44,6 +44,10 @@ bench: ## Benchmark content inspection
 .PHONY: conformance
 conformance: ## Run the OpenAI SDK conformance suite (needs Python 3 and Node)
 	conformance/run.sh
+
+.PHONY: demo-e2e
+demo-e2e: ## Play the demo scenario of docs/VISION.md against the docker compose stack (needs Docker)
+	scripts/demo-e2e.sh
 
 .PHONY: cover
 cover: ## Run tests and print total coverage

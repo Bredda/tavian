@@ -1,12 +1,21 @@
+//go:build e2e
+
 // Package e2e runs the scenario that defines success (docs/VISION.md) against
 // the real binaries, a real PostgreSQL and the configuration and policies of the
 // demo stack (deploy/compose).
+//
+// It compiles the gateway, which keeps a CPU busy for a while, so it sits behind
+// a build tag and runs on its own: next to the tests of the other packages it
+// would make the timing-sensitive ones flaky.
+//
+//	TAVIAN_TEST_DATABASE_URL=postgres://... go test -tags e2e ./e2e
 package e2e
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -55,7 +64,7 @@ func repoRoot(t *testing.T) string {
 
 func build(t *testing.T, root, out string) {
 	t.Helper()
-	cmd := exec.Command("go", "build", "-o", out, "./cmd/tavian")
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", out, "./cmd/tavian")
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -322,8 +331,9 @@ func (g *gateway) tavian(args ...string) (string, int) {
 	cmd.Env = g.env()
 	out, err := cmd.CombinedOutput()
 	code := 0
-	if ee, ok := err.(*exec.ExitError); ok {
-		code = ee.ExitCode()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		code = exit.ExitCode()
 	} else if err != nil {
 		g.t.Fatalf("tavian %v: %v", args, err)
 	}
