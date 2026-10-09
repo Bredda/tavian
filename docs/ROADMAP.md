@@ -63,7 +63,7 @@ Gaps found when comparing [SECURITY.md](SECURITY.md) with the code, closed first
 - L0 + L1 inspection: PII (IBAN, cards, NIR, email, phone), secrets, custom dictionaries; classification; actions `block/redact/flag/restrict_destinations`
 - Egress guard and the three deployment profiles
 - Quotas: rpm, concurrency, tpm, tokens/day, budget (with prices, 2.7) — reserve/settle, in-memory
-- Audit: decision records, content level `hash`, hash chain + `tavian verify-audit`
+- Audit: decision records, content level `hash` (policy setting: later), hash chain + signed seals + `tavian verify-audit`
 - Energy/carbon computed from configured profiles
 - `tavian policy test` and `shadow` mode
 
@@ -79,7 +79,7 @@ Progress:
 - [x] Policy engine, part 2: actions on findings (`block`, `redact` with verification, `restrict_destinations`, `flag`), `label` in action conditions
 - [x] Policy engine, part 3: shadow mode (recorded in decision records and a metric), `tavian policy test` running the gateway's own decision code, example fixtures, policies in the demo stack
 - [x] Quotas: `rpm`, `concurrency`, `tpm`, `tokens_per_day` set in policies, reserve/settle in memory, 429 with `Retry-After`, recorded in decision records (coalesced), soft and shadow modes. Budget in € arrives with prices (2.7); the day's count survives restarts with the usage rollups (2.6b); shared counters: M3 ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#in-main))
-- [ ] Outbox worker framework (consumer cursors, runner), hash chain over decision records, `tavian verify-audit`
+- [x] Outbox worker framework (consumer cursors, one instance per consumer, rows read in transaction order), hash chain over decision records, signed seals, `tavian audit-keygen` and `tavian verify-audit` ([AUDIT.md](AUDIT.md))
 - [ ] Outbox retention (only sealed segments read by every consumer, seals kept) and a minimal hourly usage rollup, closing the M1 item on consumers and retention
 - [ ] Energy, carbon and price snapshot in usage events
 - [ ] End-to-end finance demo test in CI

@@ -51,7 +51,12 @@ docker compose -f deploy/compose/docker-compose.yml exec postgres psql -U tavian
   "select payload->>'reason_code' as reason, payload->>'label' as label, payload->'redactions' as redactions, payload->'shadow'->>'would_refuse' as shadow_would_refuse from outbox where kind='decision' order by seq"
 ```
 
-Every answer carries an `X-Tavian-Decision-Id` header, and the decision record in PostgreSQL (`outbox`, kind `decision`) says why. The keys above are public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
+Every answer carries an `X-Tavian-Decision-Id` header, and the decision record in PostgreSQL (`outbox`, kind `decision`) says why. The records are also linked into a hash chain, sealed with a signature every 100 records or 5 minutes; check it with the public key of the demo (`docker compose run --rm audit-key` prints it):
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml exec tavian /app verify-audit -public-key ed25519:...
+```
+ The keys above are public and for the demo only (`tavian keygen` makes real ones). The interactive API reference (Scalar, with a "Test Request" button) is at <http://localhost:8080/docs>; it is embedded in the binary and works offline. Metrics and health are on `localhost:9090`. An annotated configuration lives in [configs/tavian.example.yaml](configs/tavian.example.yaml); API key expiry, rotation and revocation are in [docs/API_KEYS.md](docs/API_KEYS.md).
 
 ### Sign in with OIDC
 
@@ -67,7 +72,7 @@ Keycloak takes about 30 seconds to start; the gateway retries fetching its signi
 
 ## What works today (main, after v0.1.0)
 
-API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection looks for PII (e-mail, IBAN, payment cards, French NIR, phone, IPv4), secrets and your own dictionaries and patterns in everything a request carries, fails closed, and records findings (never the matched text) in the usage event; it observes only for now. Quotas (requests, concurrency and tokens, set in policies) answer 429 with `Retry-After`. Audit evidence is next (M2); see the [roadmap](docs/ROADMAP.md) and [docs/INSPECTION.md](docs/INSPECTION.md).
+API-key authentication with per-key model allow-lists, or sign-in with any OIDC provider (access tokens, groups mapped to teams and models) · `POST /v1/chat/completions` (streaming included) and `GET /v1/models` · OpenAI-compatible backends (vLLM, …) · strict configuration compiled into an immutable snapshot, reloadable with `SIGHUP` · egress guard enforcing the deployment profile · usage events with token counts, recorded in PostgreSQL (disk spool during outages, requests refused if the audit trail cannot record) · health, readiness and Prometheus metrics · embedded API reference at `/docs`. Content inspection looks for PII (e-mail, IBAN, payment cards, French NIR, phone, IPv4), secrets and your own dictionaries and patterns in everything a request carries, fails closed, and records findings (never the matched text) in the usage event; it observes only for now. Quotas (requests, concurrency and tokens, set in policies) answer 429 with `Retry-After`. Decision records are chained and sealed, and `tavian verify-audit` checks them ([docs/AUDIT.md](docs/AUDIT.md)). See the [roadmap](docs/ROADMAP.md) and [docs/INSPECTION.md](docs/INSPECTION.md).
 
 ## Development
 
@@ -83,6 +88,7 @@ API-key authentication with per-key model allow-lists, or sign-in with any OIDC 
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, content inspection, data classification, egress control, audit |
 | [docs/INSPECTION.md](docs/INSPECTION.md) | What is inspected today, detectors, fail-closed behaviour, tuning |
 | [docs/POLICY.md](docs/POLICY.md) | Policy model, evaluation semantics, examples, lifecycle |
+| [docs/AUDIT.md](docs/AUDIT.md) | The tamper-evident audit chain: guarantees, setup, verification |
 | [docs/QUOTAS_AND_METERING.md](docs/QUOTAS_AND_METERING.md) | Quotas (reserve/settle), multi-dimensional metering incl. energy and carbon |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Scenario-driven milestones |
 | [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) | Decisions still to make, research still to do |

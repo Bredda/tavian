@@ -8,8 +8,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/bredda/tavian/internal/chain"
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/inspect"
+	"github.com/bredda/tavian/internal/outbox"
 	"github.com/bredda/tavian/internal/policy"
 )
 
@@ -31,6 +33,10 @@ type Metrics struct {
 
 	quotaExceeded *prometheus.CounterVec
 	quotaEstimate prometheus.Histogram
+
+	consumerEvents  *prometheus.CounterVec
+	consumerErrors  *prometheus.CounterVec
+	consumerPending *prometheus.GaugeVec
 
 	eventsLost prometheus.Counter
 }
@@ -87,6 +93,18 @@ func NewMetrics() *Metrics {
 			Help:    "Tokens a request really used divided by the tokens reserved for it. Above 1 the estimate was too low.",
 			Buckets: []float64{.01, .05, .1, .25, .5, .75, 1, 1.5, 2},
 		}),
+		consumerEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_outbox_consumer_events_total",
+			Help: "Outbox events handled, by consumer.",
+		}, []string{"consumer"}),
+		consumerErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_outbox_consumer_errors_total",
+			Help: "Failed turns of an outbox consumer (retried). A steady increase means events are not being processed.",
+		}, []string{"consumer"}),
+		consumerPending: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "tavian_outbox_consumer_pending",
+			Help: "Outbox events waiting for a consumer (counted up to 10001).",
+		}, []string{"consumer"}),
 		eventsLost: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "tavian_usage_events_lost_total",
 			Help: "Usage events that could be neither stored nor spooled. Any increase is an audit gap.",
@@ -96,7 +114,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
-		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate,
+		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate, m.consumerEvents, m.consumerErrors, m.consumerPending,
 	)
 	return m
 }
@@ -127,6 +145,45 @@ func (m *Metrics) WatchStorage(up func() bool, spoolBytes func() int64, rejected
 			Name: "tavian_spool_rejected_records_total",
 			Help: "Spooled records that could not be read back and were set aside in events.rejected. Any increase needs a look.",
 		}, func() float64 { return float64(rejected()) }),
+	)
+}
+
+// ObserveConsumer records one turn of an outbox consumer.
+func (m *Metrics) ObserveConsumer(c outbox.Cycle) {
+	if c.Skipped {
+		return
+	}
+	m.consumerEvents.WithLabelValues(c.Consumer).Add(float64(c.Handled))
+	if c.Err != nil {
+		m.consumerErrors.WithLabelValues(c.Consumer).Inc()
+		return
+	}
+	m.consumerPending.WithLabelValues(c.Consumer).Set(float64(c.Pending))
+}
+
+// WatchAudit exposes the audit chain: its length, the entries no seal covers
+// yet and the age of the last seal (-1 if there is none). With a signing key
+// configured, an age that keeps growing means sealing is stuck.
+func (m *Metrics) WatchAudit(stats func() chain.Stats, now func() time.Time) {
+	m.reg.MustRegister(
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "tavian_audit_chain_entries",
+			Help: "Decision records in the hash chain.",
+		}, func() float64 { return float64(stats().Entries) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "tavian_audit_unsealed_entries",
+			Help: "Chain entries after the last seal, not yet covered by a signature.",
+		}, func() float64 { return float64(stats().Unsealed) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "tavian_audit_seconds_since_last_seal",
+			Help: "Seconds since the last seal was made, -1 if none (no signing key, or no seal yet).",
+		}, func() float64 {
+			t := stats().LastSeal
+			if t.IsZero() {
+				return -1
+			}
+			return now().Sub(t).Seconds()
+		}),
 	)
 }
 

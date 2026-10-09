@@ -3,40 +3,24 @@ package meter
 import (
 	"context"
 	"log/slog"
-	"net"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/bredda/tavian/internal/spool"
-	"github.com/bredda/tavian/internal/store"
+	"github.com/bredda/tavian/internal/store/storetest"
 )
 
 // Needs a PostgreSQL that may be wiped: see internal/store/store_test.go.
 func TestEventsOfEveryKindReachPostgresDirectlyAndThroughTheSpool(t *testing.T) {
-	url := os.Getenv("TAVIAN_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TAVIAN_TEST_DATABASE_URL not set")
-	}
 	ctx := context.Background()
+	st, url := storetest.New(t)
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
-		t.Fatal(err)
-	}
-	st, err := store.Open(ctx, url, (&net.Dialer{}).DialContext)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	if _, err := st.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
 
 	sp, err := spool.Open(t.TempDir(), 1<<20)
 	if err != nil {

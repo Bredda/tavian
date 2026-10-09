@@ -99,10 +99,14 @@ type Config struct {
 	// the built-in baseline policy applies.
 	Policy PolicyConfig `yaml:"policy"`
 	// Quota tunes how quotas (set in policies) reserve tokens.
-	Quota    QuotaConfig `yaml:"quota"`
-	Backends []Backend   `yaml:"backends"`
-	Models   []Model     `yaml:"models"`
-	APIKeys  []APIKey    `yaml:"api_keys"`
+	Quota QuotaConfig `yaml:"quota"`
+	// Audit configures the hash chain over decision records; Workers the
+	// consumers of the outbox that build it. Neither changes on reload.
+	Audit    AuditConfig   `yaml:"audit"`
+	Workers  WorkersConfig `yaml:"workers"`
+	Backends []Backend     `yaml:"backends"`
+	Models   []Model       `yaml:"models"`
+	APIKeys  []APIKey      `yaml:"api_keys"`
 
 	// PolicySources are the policy files read from Policy.Dir by Load. They are
 	// part of the configuration revision.
@@ -126,6 +130,29 @@ type QuotaConfig struct {
 
 // MaxDefaultOutputTokens bounds quota.default_output_tokens.
 const MaxDefaultOutputTokens = 1 << 20
+
+// AuditConfig sets up the tamper-evident chain of decision records
+// (docs/SECURITY.md, "Integrity"). It needs a database.
+type AuditConfig struct {
+	// SigningKeyFile is an Ed25519 key made by `tavian audit-keygen`. With it
+	// the chain is sealed with signatures; without it the chain is still
+	// built, but nothing anchors it. A relative path is relative to the
+	// configuration file.
+	SigningKeyFile string `yaml:"signing_key_file"`
+	// SealEveryEvents and SealEvery say when a seal is made: after that many
+	// new chain entries, or when the oldest unsealed entry is that old.
+	// Defaults 1000 and 5m.
+	SealEveryEvents int64         `yaml:"seal_every_events"`
+	SealEvery       time.Duration `yaml:"seal_every"`
+}
+
+// WorkersConfig tunes the outbox consumers.
+type WorkersConfig struct {
+	// PollInterval is how long a consumer waits when it has caught up (default
+	// 1s). BatchSize is how many events it handles at once (default 500).
+	PollInterval time.Duration `yaml:"poll_interval"`
+	BatchSize    int           `yaml:"batch_size"`
+}
 
 type ListenConfig struct {
 	// Data is the data-plane listener (OpenAI-compatible API).
@@ -301,6 +328,9 @@ func Load(path string) (*Config, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if k := cfg.Audit.SigningKeyFile; k != "" && !filepath.IsAbs(k) {
+		cfg.Audit.SigningKeyFile = filepath.Join(filepath.Dir(path), k)
+	}
 	if cfg.Policy.Dir != "" {
 		dir := cfg.Policy.Dir
 		if !filepath.IsAbs(dir) {
@@ -376,6 +406,18 @@ func (c *Config) applyDefaults() {
 	c.Inspection.ApplyDefaults()
 	if c.Quota.DefaultOutputTokens == 0 {
 		c.Quota.DefaultOutputTokens = 1024
+	}
+	if c.Audit.SealEveryEvents == 0 {
+		c.Audit.SealEveryEvents = 1000
+	}
+	if c.Audit.SealEvery == 0 {
+		c.Audit.SealEvery = 5 * time.Minute
+	}
+	if c.Workers.PollInterval == 0 {
+		c.Workers.PollInterval = time.Second
+	}
+	if c.Workers.BatchSize == 0 {
+		c.Workers.BatchSize = 500
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"

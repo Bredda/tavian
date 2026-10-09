@@ -14,13 +14,14 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
       -ldflags "-s -w -X github.com/bredda/tavian/internal/version.Version=${VERSION} -X github.com/bredda/tavian/internal/version.Commit=${COMMIT}" \
       -o /out/app ./cmd/${CMD}
 # Distroless has no shell to create directories; make the spool directory here
-# so a volume mounted on it inherits the non-root owner.
-RUN mkdir -p /out/spool
+# so a volume mounted on it inherits the non-root owner (same for the audit key).
+RUN mkdir -p /out/spool /out/keys
 
 # Static binary, no shell, no package manager, non-root.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/app /app
 COPY --from=build --chown=65532:65532 /out/spool /var/lib/tavian/spool
+COPY --from=build --chown=65532:65532 /out/keys /var/lib/tavian/keys
 ENV TAVIAN_CONFIG=/etc/tavian/tavian.yaml
 USER 65532:65532
 ENTRYPOINT ["/app"]

@@ -399,6 +399,54 @@ func TestQuotaDefaults(t *testing.T) {
 	}
 }
 
+func TestAuditAndWorkersSettings(t *testing.T) {
+	compile := func(extra string) (*Snapshot, *Config, error) {
+		cfg, err := Parse([]byte("profile: air-gapped\n" + extra))
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := Compile(cfg, nil, func(string) string { return "x" })
+		return snap, cfg, err
+	}
+	_, cfg, err := compile("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Audit.SealEveryEvents != 1000 || cfg.Audit.SealEvery != 5*time.Minute || cfg.Workers.PollInterval != time.Second || cfg.Workers.BatchSize != 500 {
+		t.Errorf("defaults = %+v %+v", cfg.Audit, cfg.Workers)
+	}
+	for name, c := range map[string]struct{ yaml, want string }{
+		"seal events":    {"audit: {seal_every_events: -1}\n", "audit.seal_every_events"},
+		"seal time":      {"audit: {seal_every: 100ms}\n", "audit.seal_every"},
+		"key without db": {"audit: {signing_key_file: k}\n", "needs a database"},
+		"poll too fast":  {"workers: {poll_interval: 1ms}\n", "workers.poll_interval"},
+		"poll too slow":  {"workers: {poll_interval: 2h}\n", "workers.poll_interval"},
+		"batch too big":  {"workers: {batch_size: 100000}\n", "workers.batch_size"},
+		"batch negative": {"workers: {batch_size: -3}\n", "workers.batch_size"},
+	} {
+		if _, _, err := compile(c.yaml); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+		}
+	}
+	if _, _, err := compile("database: {url_env: DB}\naudit: {signing_key_file: k, seal_every_events: 10, seal_every: 1m}\n"); err != nil {
+		t.Errorf("valid settings: %v", err)
+	}
+	if _, err := Parse([]byte("profile: air-gapped\naudit: {sign_key: k}\n")); err == nil {
+		t.Error("a typo in audit was accepted")
+	}
+
+	// the key path is relative to the configuration file
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tavian.yaml")
+	if err := os.WriteFile(path, []byte("profile: air-gapped\naudit: {signing_key_file: keys/audit.key}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := Load(path)
+	if err != nil || loaded.Audit.SigningKeyFile != filepath.Join(dir, "keys", "audit.key") {
+		t.Errorf("key path = %q, %v", loaded.Audit.SigningKeyFile, err)
+	}
+}
+
 func compileKeys(t *testing.T, keysYAML string) (*Snapshot, error) {
 	t.Helper()
 	y := "profile: air-gapped\napi_keys:\n" + keysYAML

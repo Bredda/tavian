@@ -82,6 +82,18 @@ log:
 # policy:
 #   dir: policies
 
+# Decision records are linked into a hash chain by a background worker, and the chain
+# is sealed with Ed25519 signatures so that rewriting history is detectable. See
+# docs/AUDIT.md. Make the key with `tavian audit-keygen -out audit.key`; without it the
+# chain is built but nothing anchors it. Needs a database; changing it needs a restart.
+# audit:
+#   signing_key_file: /etc/tavian/audit.key
+#   seal_every_events: 1000
+#   seal_every: 5m
+# workers:             # the consumers of the outbox
+#   poll_interval: 1s
+#   batch_size: 500
+
 # Quotas are set in policies (spec.quotas). This only tunes how tokens are
 # reserved: a request that sets no max_tokens is assumed to need this many
 # tokens for its answer. What the answer really holds is counted when it ends,

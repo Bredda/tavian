@@ -90,6 +90,21 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 	if cfg.Limits.MaxInflight < 1 {
 		addf("limits.max_inflight: must be at least 1")
 	}
+	if cfg.Audit.SealEveryEvents < 1 {
+		addf("audit.seal_every_events: must be at least 1")
+	}
+	if cfg.Audit.SealEvery < time.Second {
+		addf("audit.seal_every: must be at least 1s")
+	}
+	if cfg.Audit.SigningKeyFile != "" && cfg.Database.URLEnv == "" {
+		addf("audit.signing_key_file: the audit chain needs a database (database.url_env)")
+	}
+	if p := cfg.Workers.PollInterval; p < 10*time.Millisecond || p > time.Minute {
+		addf("workers.poll_interval: must be between 10ms and 1m")
+	}
+	if n := cfg.Workers.BatchSize; n < 1 || n > 5000 {
+		addf("workers.batch_size: must be between 1 and 5000")
+	}
 	if n := cfg.Quota.DefaultOutputTokens; n < 1 || n > MaxDefaultOutputTokens {
 		addf("quota.default_output_tokens: must be between 1 and %d", MaxDefaultOutputTokens)
 	}
