@@ -224,6 +224,21 @@ func compilePolicy(inferEnv, actionEnv *cel.Env, d Document, where, source strin
 	return p, errs
 }
 
+// Scopes lists the scopes that have a limit on dim, each once.
+func (e *Engine) Scopes(dim quota.Dimension) []quota.Scope {
+	var out []quota.Scope
+	seen := map[quota.Scope]bool{}
+	for _, p := range e.policies {
+		for _, l := range p.quotas {
+			if l.Dimension == dim && !seen[l.Scope] {
+				seen[l.Scope] = true
+				out = append(out, l.Scope)
+			}
+		}
+	}
+	return out
+}
+
 // Limits lists the quotas that apply to the caller: every policy's, including
 // those in shadow mode (marked as such, so they count and report but never
 // refuse). Every one of them must pass.

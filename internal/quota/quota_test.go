@@ -414,3 +414,61 @@ func TestCoalescerStaysBoundedAndFailsTowardRecording(t *testing.T) {
 		t.Fatal("stale entries were not swept")
 	}
 }
+
+func TestScopeMatches(t *testing.T) {
+	for _, c := range []struct {
+		scope     Scope
+		team, app string
+		want      bool
+	}{
+		{Scope{Organization: true}, "a", "b", true},
+		{Scope{Team: "a"}, "a", "b", true},
+		{Scope{Team: "a"}, "x", "b", false},
+		{Scope{Application: "b"}, "x", "b", true},
+		{Scope{Application: "b"}, "x", "y", false},
+		{Scope{Team: "a", Application: "b"}, "a", "b", true},
+		{Scope{Team: "a", Application: "b"}, "a", "y", false},
+		{Scope{Team: "a", Application: "b"}, "x", "b", false},
+	} {
+		if got := c.scope.Matches(c.team, c.app); got != c.want {
+			t.Errorf("%+v.Matches(%q, %q) = %v", c.scope, c.team, c.app, got)
+		}
+	}
+}
+
+func TestSeedTokensPerDay(t *testing.T) {
+	clk := newClock()
+	s := NewStore(clk.now)
+	limits := []Limit{lim(TokensPerDay, 1000)}
+	if !s.SeedTokensPerDay(team, 900) {
+		t.Fatal("not seeded")
+	}
+	if s.SeedTokensPerDay(team, 5) {
+		t.Fatal("a counter that exists was seeded again")
+	}
+	if _, res := s.Reserve(limits, 101); !res.Refused {
+		t.Fatal("seeded tokens not counted")
+	}
+	r, res := s.Reserve(limits, 100)
+	if res.Refused {
+		t.Fatal("seeded more than 900")
+	}
+	r.Settle(100)
+	// a counter that was counting is not overwritten
+	other := Scope{Team: "other"}
+	if _, res := s.Reserve([]Limit{{Policy: "p", Scope: other, Dimension: TokensPerDay, Max: 100}}, 10); res.Refused {
+		t.Fatal("setup")
+	}
+	if s.SeedTokensPerDay(other, 99) {
+		t.Fatal("a counter in use was overwritten")
+	}
+	s.SeedTokensPerDay(Scope{Team: "neg"}, -50)
+	if _, res := s.Reserve([]Limit{{Policy: "p", Scope: Scope{Team: "neg"}, Dimension: TokensPerDay, Max: 10}}, 10); res.Refused {
+		t.Fatal("a negative seed became a debt")
+	}
+	// the seed belongs to today
+	clk.advance(24 * time.Hour)
+	if _, res := s.Reserve(limits, 1000); res.Refused {
+		t.Fatal("seeded tokens survived midnight")
+	}
+}

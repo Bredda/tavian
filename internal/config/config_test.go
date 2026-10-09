@@ -447,6 +447,48 @@ func TestAuditAndWorkersSettings(t *testing.T) {
 	}
 }
 
+func TestOutboxRetentionSettings(t *testing.T) {
+	compile := func(extra string) (*Config, error) {
+		cfg, err := Parse([]byte("profile: air-gapped\n" + extra))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Compile(cfg, nil, func(string) string { return "x" })
+		return cfg, err
+	}
+	cfg, err := compile("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep := cfg.Outbox.Retention.Keep()
+	if len(keep) != 1 || keep["usage"] != 90*24*time.Hour || cfg.Outbox.PruneEvery != time.Hour {
+		t.Errorf("defaults: usage 90 days, decision records kept, every hour; got %v %v", keep, cfg.Outbox.PruneEvery)
+	}
+	// zero means for ever, and is not replaced by the default
+	cfg, err = compile("outbox: {retention: {usage_days: 0}}\n")
+	if err != nil || len(cfg.Outbox.Retention.Keep()) != 0 {
+		t.Errorf("usage_days: 0 = %v, %v", cfg.Outbox.Retention.Keep(), err)
+	}
+	cfg, err = compile("database: {url_env: DB}\naudit: {signing_key_file: k}\noutbox: {retention: {usage_days: 30, decision_days: 365}, prune_every: 10m}\n")
+	if err != nil || cfg.Outbox.Retention.Keep()["decision"] != 365*24*time.Hour {
+		t.Errorf("valid retention: %v %v", cfg.Outbox.Retention.Keep(), err)
+	}
+	for name, c := range map[string]struct{ yaml, want string }{
+		"negative":          {"outbox: {retention: {usage_days: -1}}\n", "usage_days"},
+		"absurd":            {"outbox: {retention: {decision_days: 100000}}\n", "decision_days"},
+		"decisions no seal": {"outbox: {retention: {decision_days: 30}}\n", "signed seal"},
+		"too often":         {"outbox: {prune_every: 5s}\n", "prune_every"},
+		"too rarely":        {"outbox: {prune_every: 72h}\n", "prune_every"},
+	} {
+		if _, err := compile(c.yaml); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+		}
+	}
+	if _, err := Parse([]byte("profile: air-gapped\noutbox: {retention: {usage_day: 3}}\n")); err == nil {
+		t.Error("a typo in retention was accepted")
+	}
+}
+
 func compileKeys(t *testing.T, keysYAML string) (*Snapshot, error) {
 	t.Helper()
 	y := "profile: air-gapped\napi_keys:\n" + keysYAML

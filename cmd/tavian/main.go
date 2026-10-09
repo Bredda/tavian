@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/bredda/tavian/internal/meter"
 	"github.com/bredda/tavian/internal/outbox"
 	"github.com/bredda/tavian/internal/provider/openai"
+	"github.com/bredda/tavian/internal/quota"
+	"github.com/bredda/tavian/internal/rollup"
 	"github.com/bredda/tavian/internal/server"
 	"github.com/bredda/tavian/internal/spool"
 	"github.com/bredda/tavian/internal/store"
@@ -258,7 +261,18 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		log.Info("OIDC enabled", "issuer", cfg.OIDC.Issuer, "audience", cfg.OIDC.Audience, "mappings", len(cfg.OIDC.Mappings))
 	}
 
+	// quota counters live for the life of the process; after a restart the
+	// day's token counts are rebuilt from what the database recorded
+	qstore := quota.NewStore(nil)
+	if st != nil {
+		if err := seedQuotas(ctx, log, st, qstore, snap); err != nil {
+			log.Error("quotas", "error", err)
+			return 1
+		}
+	}
+
 	deps := server.Deps{
+		Quota:    qstore,
 		Snap:     holder,
 		Auth:     authn,
 		Provider: openai.New(guard.HTTPClient(cfg.Limits.UpstreamHeaderTimeout), "tavian/"+version.String()),
@@ -286,7 +300,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
-			reload(ctx, log, *path, cfg, holder, st)
+			reload(ctx, log, *path, cfg, holder, st, qstore)
 		}
 	}()
 
@@ -327,8 +341,22 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	return code
 }
 
-// startWorkers runs the consumers of the outbox: today the one that chains and
-// seals decision records. done is closed when they have stopped.
+// seedQuotas gives the daily token counters of the scopes that have a limit the
+// usage recorded today. Counters that already count are left alone.
+func seedQuotas(ctx context.Context, log *slog.Logger, st *store.Store, qs *quota.Store, snap *config.Snapshot) error {
+	n, err := rollup.Seed(ctx, st.Pool(), qs, snap.Policy.Scopes(quota.TokensPerDay), time.Now())
+	if err != nil {
+		return fmt.Errorf("rebuilding today's token counts (daily limits would start from zero): %w", err)
+	}
+	if n > 0 {
+		log.Info("daily token counters rebuilt from recorded usage", "scopes", n)
+	}
+	return nil
+}
+
+// startWorkers runs the consumers of the outbox (the audit chain, the hourly
+// usage sums) and the pruner that applies retention. done is closed when they
+// have stopped.
 func startWorkers(ctx context.Context, cfg *config.Config, st *store.Store, metrics *server.Metrics, log *slog.Logger, done chan struct{}) error {
 	sealer := &chain.Sealer{SealEveryEvents: cfg.Audit.SealEveryEvents, SealEvery: cfg.Audit.SealEvery}
 	if k := cfg.Audit.SigningKeyFile; k != "" {
@@ -346,13 +374,35 @@ func startWorkers(ctx context.Context, cfg *config.Config, st *store.Store, metr
 		OnCycle: metrics.ObserveConsumer,
 	}
 	runner.Add(sealer)
+	runner.Add(rollup.Consumer{Log: log})
 	if err := runner.Register(ctx); err != nil {
 		return err
 	}
 	metrics.WatchAudit(sealer.Stats, time.Now)
+
+	keep := cfg.Outbox.Retention.Keep()
+	pruner := &outbox.Pruner{
+		Pool: st.Pool(), Log: log, Keep: keep, Every: cfg.Outbox.PruneEvery,
+		OnPruned: metrics.ObservePruned, OnError: metrics.ObservePruneError,
+	}
+	log.Info("outbox retention", "usage_days", *cfg.Outbox.Retention.UsageDays, "decision_days", *cfg.Outbox.Retention.DecisionDays, "every", cfg.Outbox.PruneEvery)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		defer close(done)
+		defer wg.Done()
 		runner.Run(ctx)
+	}()
+	if len(keep) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pruner.Run(ctx)
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(done)
 	}()
 	return nil
 }
@@ -422,7 +472,7 @@ func saveRevision(ctx context.Context, st *store.Store, snap *config.Snapshot, r
 // the database before it goes live, so every usage event can be traced back to
 // a stored configuration; if that fails, or anything fails validation, the
 // current revision stays.
-func reload(ctx context.Context, log *slog.Logger, path string, running *config.Config, holder *config.Holder, st *store.Store) {
+func reload(ctx context.Context, log *slog.Logger, path string, running *config.Config, holder *config.Holder, st *store.Store, qs *quota.Store) {
 	cfg, raw, err := config.Load(path)
 	if err == nil && cfg.Profile != running.Profile {
 		err = fmt.Errorf("profile changed from %q to %q: restart required", running.Profile, cfg.Profile)
@@ -430,8 +480,8 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 	if err == nil && cfg.Database != running.Database {
 		err = errors.New("database settings changed: restart required")
 	}
-	if err == nil && (cfg.Audit != running.Audit || cfg.Workers != running.Workers) {
-		err = errors.New("audit or workers settings changed: restart required")
+	if err == nil && (cfg.Audit != running.Audit || cfg.Workers != running.Workers || !reflect.DeepEqual(cfg.Outbox, running.Outbox)) {
+		err = errors.New("audit, workers or outbox settings changed: restart required")
 	}
 	if err == nil && !sameOIDCConnection(cfg.OIDC, running.OIDC) {
 		err = errors.New("oidc settings other than mappings changed: restart required")
@@ -443,6 +493,10 @@ func reload(ctx context.Context, log *slog.Logger, path string, running *config.
 	if err == nil && st != nil {
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err = saveRevision(rctx, st, snap, raw)
+		if err == nil && qs != nil {
+			// a policy added now may limit a scope that has been using tokens all day
+			err = seedQuotas(rctx, log, st, qs, snap)
+		}
 		cancel()
 	}
 	if err != nil {

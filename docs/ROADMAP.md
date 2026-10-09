@@ -37,7 +37,7 @@ Progress (skeleton merged = ✓):
 - [x] Content-free structured logs, `/healthz`, `/readyz`, `/metrics`
 - [x] Compose demo on an Internet-less network (gateway + mock backend)
 - [x] PostgreSQL: embedded migrations (`tavian migrate`), usage events via transactional outbox ([ADR-0010](adr/0010-transactional-outbox-no-broker.md)) with a bounded disk spool and fail-closed admission, every config revision persisted
-- [ ] Outbox consumers (rollups, export) and retention: events accumulate until they exist *(scheduled in M2: worker framework with the audit hash chain, then retention and a minimal rollup; chargeback export stays in M3)*
+- [x] Outbox consumers (rollups) and retention: hourly usage sums and pruning of old events *(done in M2 step 2.6b; the chargeback export stays in M3)*
 - [x] Generic OIDC bearer validation (JWKS cache with max staleness, group → team/model mappings) behind the `Authenticator` interface
 - [x] PostgreSQL in the compose stack
 - [x] Keycloak in the compose stack (realm `tavian`, users alice and bob)
@@ -78,9 +78,9 @@ Progress:
 - [x] Policy engine, part 1: YAML policies in `policy.dir` with CEL conditions, scopes (organization, team, application), narrowing-only models/destinations/default label/label rules, built-in baseline in the same format, policies stored with each revision
 - [x] Policy engine, part 2: actions on findings (`block`, `redact` with verification, `restrict_destinations`, `flag`), `label` in action conditions
 - [x] Policy engine, part 3: shadow mode (recorded in decision records and a metric), `tavian policy test` running the gateway's own decision code, example fixtures, policies in the demo stack
-- [x] Quotas: `rpm`, `concurrency`, `tpm`, `tokens_per_day` set in policies, reserve/settle in memory, 429 with `Retry-After`, recorded in decision records (coalesced), soft and shadow modes. Budget in € arrives with prices (2.7); the day's count survives restarts with the usage rollups (2.6b); shared counters: M3 ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#in-main))
+- [x] Quotas: `rpm`, `concurrency`, `tpm`, `tokens_per_day` set in policies, reserve/settle in memory, 429 with `Retry-After`, recorded in decision records (coalesced), soft and shadow modes. Budget in € arrives with prices (2.7); the day's token count is rebuilt from the hourly usage sums after a restart; shared counters: M3 ([QUOTAS_AND_METERING.md](QUOTAS_AND_METERING.md#in-main))
 - [x] Outbox worker framework (consumer cursors, one instance per consumer, rows read in transaction order), hash chain over decision records, signed seals, `tavian audit-keygen` and `tavian verify-audit` ([AUDIT.md](AUDIT.md))
-- [ ] Outbox retention (only sealed segments read by every consumer, seals kept) and a minimal hourly usage rollup, closing the M1 item on consumers and retention
+- [x] Outbox retention (rows older than their retention and read by every consumer; decision records only under a signed seal; chain and seals kept; every removal logged for `verify-audit`) and a minimal hourly usage rollup that also rebuilds the daily token counters, closing the M1 item on consumers and retention ([AUDIT.md](AUDIT.md#retention))
 - [ ] Energy, carbon and price snapshot in usage events
 - [ ] End-to-end finance demo test in CI
 
@@ -91,7 +91,7 @@ Progress:
 - `POST /v1/embeddings`
 - OpenTelemetry traces (one span per stage), Prometheus metrics, reference Grafana dashboards
 - Multi-replica support: Redis shared counters, snapshot distribution
-- Usage rollups and chargeback export
+- Chargeback export (CSV/JSON) from the hourly usage sums
 - Native TLS on both listeners; mTLS to PostgreSQL and internal backends
 - Database-backed API keys with last-use tracking and a revocation list (with the admin API)
 - Fuzzing of the request, SSE, JWT and configuration parsers in scheduled CI

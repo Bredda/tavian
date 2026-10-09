@@ -890,3 +890,19 @@ func TestLimitsFollowTheScopesThatApply(t *testing.T) {
 		t.Errorf("baseline alone has %d limits", n)
 	}
 }
+
+func TestScopesListsEachScopeWithALimitOnce(t *testing.T) {
+	head := "apiVersion: tavian/v1alpha1\nkind: Policy\n"
+	e := compile(t,
+		head+"metadata: { name: a }\nspec:\n  scope: { team: finance }\n  quotas: [ { dimension: tokens_per_day, limit: 10 }, { dimension: rpm, limit: 5 } ]\n",
+		head+"metadata: { name: b }\nspec:\n  scope: { team: finance }\n  quotas: [ { dimension: tokens_per_day, limit: 20 } ]\n",
+		head+"metadata: { name: c, mode: shadow }\nspec:\n  scope: { organization: true }\n  quotas: [ { dimension: tokens_per_day, limit: 99 } ]\n",
+	)
+	got := e.Scopes(quota.TokensPerDay)
+	if len(got) != 2 || got[0] != (quota.Scope{Team: "finance"}) || got[1] != (quota.Scope{Organization: true}) {
+		t.Errorf("scopes = %+v", got)
+	}
+	if got := e.Scopes(quota.Concurrency); len(got) != 0 {
+		t.Errorf("concurrency scopes = %+v", got)
+	}
+}

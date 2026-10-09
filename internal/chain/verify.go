@@ -155,6 +155,9 @@ func Verify(ctx context.Context, pool *pgxpool.Pool, opt Options) (*Report, erro
 	if err := completeness(ctx, pool, rep); err != nil {
 		return nil, err
 	}
+	if err := checkRetention(ctx, pool, rep, opt); err != nil {
+		return nil, err
+	}
 	checkAnchors(rep, opt, seals, byKey)
 	if !rep.SignaturesChecked {
 		rep.Warnings = append(rep.Warnings, "seal signatures were not checked (no public key given): the chain is checked against itself only")
@@ -319,6 +322,29 @@ WHERE o.kind = $2 AND NOT EXISTS (SELECT 1 FROM audit_chain c WHERE c.event_id =
 		return fmt.Errorf("check completeness: %w", err)
 	}
 	rep.Pending = n
+	return nil
+}
+
+// checkRetention compares the records missing from the outbox with what the
+// retention log says was removed: a record that is missing without being
+// accounted for was removed some other way.
+func checkRetention(ctx context.Context, pool *pgxpool.Pool, rep *Report, opt Options) error {
+	var logged int64
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(sum(rows), 0)::bigint FROM outbox_prunes WHERE kind = $1`, KindDecision).Scan(&logged); err != nil {
+		return fmt.Errorf("read retention log: %w", err)
+	}
+	switch {
+	case !opt.AllowPruned:
+		if logged > 0 {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("retention has removed %d decision records from the outbox: give -allow-pruned to accept the ones a signed seal covers", logged))
+		}
+	case opt.FromSeal > 0:
+		rep.Warnings = append(rep.Warnings, "the retention log was not compared with the missing records: the walk started at a seal")
+	case rep.Pruned > logged:
+		rep.problem(0, "", "%d records are missing from the outbox but the retention log accounts for %d: the others were removed some other way", rep.Pruned, logged)
+	case rep.Pruned < logged:
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("the retention log says %d records were removed but only %d are missing", logged, rep.Pruned))
+	}
 	return nil
 }
 

@@ -37,6 +37,8 @@ type Metrics struct {
 	consumerEvents  *prometheus.CounterVec
 	consumerErrors  *prometheus.CounterVec
 	consumerPending *prometheus.GaugeVec
+	pruned          *prometheus.CounterVec
+	pruneErrors     prometheus.Counter
 
 	eventsLost prometheus.Counter
 }
@@ -105,6 +107,14 @@ func NewMetrics() *Metrics {
 			Name: "tavian_outbox_consumer_pending",
 			Help: "Outbox events waiting for a consumer (counted up to 10001).",
 		}, []string{"consumer"}),
+		pruned: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "tavian_outbox_pruned_total",
+			Help: "Events removed from the outbox by retention, by kind.",
+		}, []string{"kind"}),
+		pruneErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "tavian_outbox_prune_errors_total",
+			Help: "Failed retention passes. A steady increase means the outbox is growing.",
+		}),
 		eventsLost: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "tavian_usage_events_lost_total",
 			Help: "Usage events that could be neither stored nor spooled. Any increase is an audit gap.",
@@ -114,7 +124,7 @@ func NewMetrics() *Metrics {
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		m.requests, m.duration, m.tokens, m.eventsLost,
-		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate, m.consumerEvents, m.consumerErrors, m.consumerPending,
+		m.inspections, m.findings, m.inspectTime, m.labels, m.actions, m.shadow, m.quotaExceeded, m.quotaEstimate, m.consumerEvents, m.consumerErrors, m.consumerPending, m.pruned, m.pruneErrors,
 	)
 	return m
 }
@@ -160,6 +170,14 @@ func (m *Metrics) ObserveConsumer(c outbox.Cycle) {
 	}
 	m.consumerPending.WithLabelValues(c.Consumer).Set(float64(c.Pending))
 }
+
+// ObservePruned counts events removed by retention.
+func (m *Metrics) ObservePruned(kind string, rows int64) {
+	m.pruned.WithLabelValues(kind).Add(float64(rows))
+}
+
+// ObservePruneError counts a failed retention pass.
+func (m *Metrics) ObservePruneError(error) { m.pruneErrors.Inc() }
 
 // WatchAudit exposes the audit chain: its length, the entries no seal covers
 // yet and the age of the last seal (-1 if there is none). With a signing key

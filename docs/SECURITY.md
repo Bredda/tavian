@@ -158,7 +158,8 @@ Default: `hash`. Storing content is a conscious, policy-level decision with a ma
 - Audit records are append-only and linked by a **hash chain** (each entry commits to the record and to the previous entry), built by an outbox consumer. *Built; see [AUDIT.md](AUDIT.md).*
 - The chain is periodically **sealed and signed** (Ed25519, key outside the database); seals can be exported to an independent location (offline media, a separate system) so that tampering by someone with database access is detectable. *Built.*
 - `tavian verify-audit` recomputes the chain and verifies signatures and exported seals. Auditors need only a read-only database role. *Built.*
-- Not yet: segments of the outbox pruned after sealing (step 2.6b), a signing key in a KMS or HSM, automatic export of seals.
+- Retention removes old events from the outbox, decision records only once a signed seal covers them; every removal is logged so that `verify-audit` can tell retention from tampering ([AUDIT.md](AUDIT.md#retention)). *Built.*
+- Not yet: a signing key in a KMS or HSM, automatic export of seals.
 
 ### Confidentiality and erasure
 

@@ -63,6 +63,15 @@ func (s Scope) Kind() string {
 	return "application"
 }
 
+// Matches reports whether usage by this team and application falls under the
+// scope.
+func (s Scope) Matches(team, application string) bool {
+	if s.Organization {
+		return true
+	}
+	return (s.Team == "" || s.Team == team) && (s.Application == "" || s.Application == application)
+}
+
 // Limit is one quota as a policy sets it.
 type Limit struct {
 	// Policy names the policy that sets the limit.
@@ -249,6 +258,21 @@ func (s *Store) check(l Limit, n int64, now time.Time) (Check, bool) {
 		chk.Retry = untilMidnight(now)
 	}
 	return chk, true
+}
+
+// SeedTokensPerDay sets the tokens already used today under scope, after a
+// restart. A counter that exists is left alone (it has been counting since
+// before): the call reports whether it set one.
+func (s *Store) SeedTokensPerDay(scope Scope, tokens int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := counterKey{scope, TokensPerDay}
+	if _, ok := s.counters[k]; ok {
+		return false
+	}
+	c := s.get(k)
+	c.day, c.use = s.now().Unix()/86400, max(0, tokens)
+	return true
 }
 
 // Slot is an admitted request: it holds a unit of concurrency until Release.

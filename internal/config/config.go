@@ -102,11 +102,13 @@ type Config struct {
 	Quota QuotaConfig `yaml:"quota"`
 	// Audit configures the hash chain over decision records; Workers the
 	// consumers of the outbox that build it. Neither changes on reload.
-	Audit    AuditConfig   `yaml:"audit"`
-	Workers  WorkersConfig `yaml:"workers"`
-	Backends []Backend     `yaml:"backends"`
-	Models   []Model       `yaml:"models"`
-	APIKeys  []APIKey      `yaml:"api_keys"`
+	Audit   AuditConfig   `yaml:"audit"`
+	Workers WorkersConfig `yaml:"workers"`
+	// Outbox sets how long events are kept in the database. Not reloadable.
+	Outbox   OutboxConfig `yaml:"outbox"`
+	Backends []Backend    `yaml:"backends"`
+	Models   []Model      `yaml:"models"`
+	APIKeys  []APIKey     `yaml:"api_keys"`
 
 	// PolicySources are the policy files read from Policy.Dir by Load. They are
 	// part of the configuration revision.
@@ -153,6 +155,38 @@ type WorkersConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 	BatchSize    int           `yaml:"batch_size"`
 }
+
+// OutboxConfig sets retention: events are removed from the outbox once they
+// are older than their retention and every consumer has handled them.
+type OutboxConfig struct {
+	Retention RetentionConfig `yaml:"retention"`
+	// PruneEvery is how often retention runs (default 1h).
+	PruneEvery time.Duration `yaml:"prune_every"`
+}
+
+// RetentionConfig is how many days each kind of event is kept; 0 means for
+// ever. Usage events are summed by the hour before they go (default 90 days).
+// Decision records are never removed unless decision_days is set, and then only
+// once a signed seal covers them, so it needs audit.signing_key_file.
+type RetentionConfig struct {
+	UsageDays    *int `yaml:"usage_days"`
+	DecisionDays *int `yaml:"decision_days"`
+}
+
+// Keep returns the retention of each kind that has one.
+func (r RetentionConfig) Keep() map[string]time.Duration {
+	keep := map[string]time.Duration{}
+	if r.UsageDays != nil && *r.UsageDays > 0 {
+		keep["usage"] = time.Duration(*r.UsageDays) * 24 * time.Hour
+	}
+	if r.DecisionDays != nil && *r.DecisionDays > 0 {
+		keep["decision"] = time.Duration(*r.DecisionDays) * 24 * time.Hour
+	}
+	return keep
+}
+
+// MaxRetentionDays bounds the retention settings.
+const MaxRetentionDays = 36500
 
 type ListenConfig struct {
 	// Data is the data-plane listener (OpenAI-compatible API).
@@ -418,6 +452,17 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Workers.BatchSize == 0 {
 		c.Workers.BatchSize = 500
+	}
+	if c.Outbox.Retention.UsageDays == nil {
+		d := 90
+		c.Outbox.Retention.UsageDays = &d
+	}
+	if c.Outbox.Retention.DecisionDays == nil {
+		d := 0
+		c.Outbox.Retention.DecisionDays = &d
+	}
+	if c.Outbox.PruneEvery == 0 {
+		c.Outbox.PruneEvery = time.Hour
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"

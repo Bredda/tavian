@@ -99,6 +99,17 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 	if cfg.Audit.SigningKeyFile != "" && cfg.Database.URLEnv == "" {
 		addf("audit.signing_key_file: the audit chain needs a database (database.url_env)")
 	}
+	for field, days := range map[string]*int{"usage_days": cfg.Outbox.Retention.UsageDays, "decision_days": cfg.Outbox.Retention.DecisionDays} {
+		if days != nil && (*days < 0 || *days > MaxRetentionDays) {
+			addf("outbox.retention.%s: must be between 0 and %d", field, MaxRetentionDays)
+		}
+	}
+	if d := cfg.Outbox.Retention.DecisionDays; d != nil && *d > 0 && cfg.Audit.SigningKeyFile == "" {
+		addf("outbox.retention.decision_days: decision records are only removed under a signed seal, set audit.signing_key_file")
+	}
+	if p := cfg.Outbox.PruneEvery; p < time.Minute || p > 24*time.Hour {
+		addf("outbox.prune_every: must be between 1m and 24h")
+	}
 	if p := cfg.Workers.PollInterval; p < 10*time.Millisecond || p > time.Minute {
 		addf("workers.poll_interval: must be between 10ms and 1m")
 	}
