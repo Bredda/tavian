@@ -136,7 +136,7 @@ func demoConfig(t *testing.T, root, dir string, onprem, partner *backend, data, 
 	cfg["listen"] = map[string]any{"data": data, "admin": admin}
 	cfg["database"] = map[string]any{"url_env": "TAVIAN_DATABASE_URL", "spool_dir": filepath.Join(dir, "spool")}
 	cfg["audit"] = map[string]any{"signing_key_file": filepath.Join(dir, "audit.key"), "seal_every_events": 4, "seal_every": "2s"}
-	cfg["admin"] = map[string]any{"tokens": tokens}
+	cfg["admin"] = map[string]any{"tokens": tokens, "use_flush_every": "1s"}
 	cfg["workers"] = map[string]any{"poll_interval": "100ms"}
 	cfg["policy"] = map[string]any{"dir": filepath.Join(dir, "policies")}
 	for _, b := range cfg["backends"].([]any) {
@@ -268,6 +268,16 @@ func (g *gateway) stop() error {
 func (g *gateway) logs() string {
 	b, _ := os.ReadFile(g.log)
 	return string(b)
+}
+
+func grepMetrics(all, prefix string) string {
+	var out []string
+	for _, l := range strings.Split(all, "\n") {
+		if strings.HasPrefix(l, prefix) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func (g *gateway) metrics() string {
@@ -1015,6 +1025,155 @@ func TestFinanceDemo(t *testing.T) {
 		out, code = g.tavianEnv([]string{"TAVIAN_ADMIN_TOKEN="}, "config", "list", "-server", "http://"+g.admin)
 		if code != 1 || !strings.Contains(out, "TAVIAN_ADMIN_TOKEN") {
 			t.Errorf("no token: %d %s", code, out)
+		}
+	})
+
+	// 4e. The life of a token: its use is written in batches and survives the
+	//     shutdown, an expired one is refused and named, a removed one stops at
+	//     once, and the last admin cannot be taken away by expiry.
+	t.Run("admin tokens expire, rotate and are revoked", func(t *testing.T) {
+		call := func(token, method, path, body string) (int, string) { return g.adminCall(method, path, token, body) }
+		activeYAML := func() (string, string) {
+			code, body := call(adminToken, "GET", "/admin/v1/config/revisions/active", "")
+			var r struct{ Revision, Config string }
+			if err := json.Unmarshal([]byte(body), &r); err != nil || code != 200 {
+				t.Fatalf("active revision: %d %s", code, body)
+			}
+			return r.Revision, r.Config
+		}
+		// applies the active configuration with another list of tokens, as the admin
+		applyTokens := func(mut func([]any) []any) (int, string) {
+			base, raw := activeYAML()
+			var cfg map[string]any
+			if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			a := cfg["admin"].(map[string]any)
+			a["tokens"] = mut(a["tokens"].([]any))
+			out, _ := yaml.Marshal(cfg)
+			payload, _ := json.Marshal(map[string]any{"config": string(out), "base": base})
+			return call(adminToken, "POST", "/admin/v1/config/apply", string(payload))
+		}
+		without := func(id string) func([]any) []any {
+			return func(ts []any) []any {
+				var out []any
+				for _, x := range ts {
+					if x.(map[string]any)["id"] != id {
+						out = append(out, x)
+					}
+				}
+				return out
+			}
+		}
+
+		// the use is counted: seen at once, written within the flush interval
+		written := func() int64 {
+			return query[int64](t, pool, `SELECT COALESCE(sum(uses), 0)::bigint FROM admin_token_use WHERE token_id = 'e2e-auditor'`)
+		}
+		first := written()
+		for i := 0; i < 3; i++ {
+			call(auditorToken, "GET", "/admin/v1/whoami", "")
+		}
+		code, body := call(auditorToken, "GET", "/admin/v1/tokens", "")
+		if code != 200 || !strings.Contains(body, `"id":"e2e-auditor"`) || !strings.Contains(body, `"last_remote":"127.0.0.1"`) {
+			t.Fatalf("tokens: %d %s", code, body)
+		}
+		if strings.Contains(body, "sha256:") || strings.Contains(body, auditorToken) || strings.Contains(body, adminToken) {
+			t.Errorf("the listing shows a secret: %s", body)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			n := written()
+			if n >= first+4 { // three whoami and the listing itself
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the use of the auditor token was never written: %d, was %d", n, first)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		// an expired token: refused like an unknown one, named in the log, counted
+		staleToken, stale := newToken("e2e-stale", "operator")
+		stale["expires_at"] = "2020-01-01T00:00:00Z"
+		if code, body := applyTokens(func(ts []any) []any { return append(ts, stale) }); code != 200 {
+			t.Fatalf("adding an expired token: %d %s", code, body)
+		}
+		codeStale, bodyStale := call(staleToken, "GET", "/admin/v1/whoami", "")
+		codeNone, bodyNone := call("tavadm_unknown", "GET", "/admin/v1/whoami", "")
+		if codeStale != 401 || codeNone != 401 || bodyStale != bodyNone {
+			t.Errorf("an expired token (%d %s) must look like an unknown one (%d %s)", codeStale, bodyStale, codeNone, bodyNone)
+		}
+		if logs := g.logs(); !strings.Contains(logs, "admin token e2e-stale expired") || !strings.Contains(logs, "admin tokens past their expires_at are refused") || strings.Contains(logs, staleToken) {
+			t.Errorf("the log does not say which token expired, or shows it:\n%s", logs)
+		}
+		if m := g.metrics(); !strings.Contains(m, "tavian_admin_tokens_expired 1") {
+			t.Errorf("metrics:\n%s", grepMetrics(m, "tavian_admin_tokens"))
+		}
+		if _, body := call(auditorToken, "GET", "/admin/v1/tokens", ""); !strings.Contains(body, `"id":"e2e-stale"`) || !strings.Contains(body, `"expired":true`) {
+			t.Errorf("the expired token is not listed as such: %s", body)
+		}
+
+		// rotation: a new token next to the old one, then the old one goes, at once
+		newAdminToken, newAdmin := newToken("e2e-admin-2", "admin")
+		if code, body := applyTokens(func(ts []any) []any { return append(ts, newAdmin) }); code != 200 {
+			t.Fatalf("adding the new token: %d %s", code, body)
+		}
+		if c1, _ := call(newAdminToken, "GET", "/admin/v1/whoami", ""); c1 != 200 {
+			t.Errorf("the new token: %d", c1)
+		}
+		if c2, _ := call(adminToken, "GET", "/admin/v1/whoami", ""); c2 != 200 {
+			t.Errorf("the old token next to it: %d", c2)
+		}
+		// revocation: the operator's token is removed by the new admin
+		if code, body := call(operatorToken, "GET", "/admin/v1/whoami", ""); code != 200 {
+			t.Fatalf("operator before: %d %s", code, body)
+		}
+		base, raw := activeYAML()
+		var cfg map[string]any
+		_ = yaml.Unmarshal([]byte(raw), &cfg)
+		a := cfg["admin"].(map[string]any)
+		a["tokens"] = without("e2e-operator")(a["tokens"].([]any))
+		out, _ := yaml.Marshal(cfg)
+		payload, _ := json.Marshal(map[string]any{"config": string(out), "base": base})
+		if code, body := call(newAdminToken, "POST", "/admin/v1/config/apply", string(payload)); code != 200 {
+			t.Fatalf("revoking: %d %s", code, body)
+		}
+		if code, _ := call(operatorToken, "GET", "/admin/v1/whoami", ""); code != 401 {
+			t.Errorf("a revoked token still works: %d", code)
+		}
+
+		// the last admin cannot be given an expiry in the past
+		if code, body := applyTokens(func(ts []any) []any {
+			var out []any
+			for _, x := range ts {
+				m := x.(map[string]any)
+				if m["role"] == "admin" {
+					m["expires_at"] = "2020-01-01T00:00:00Z"
+				}
+				out = append(out, m)
+			}
+			return out
+		}); code != 422 && code != 409 || !strings.Contains(body, "no_admin_token") {
+			t.Errorf("expiring every admin: %d %s", code, body)
+		}
+		if code, _ := call(adminToken, "GET", "/admin/v1/whoami", ""); code != 200 {
+			t.Error("a refused change expired the admin")
+		}
+
+		// what was counted just before a clean shutdown is written by it
+		for i := 0; i < 4; i++ {
+			call(newAdminToken, "GET", "/admin/v1/whoami", "")
+		}
+		if err := g.stop(); err != nil {
+			t.Fatalf("stop: %v", err)
+		}
+		if n := query[int64](t, pool, `SELECT COALESCE(sum(uses), 0)::bigint FROM admin_token_use WHERE token_id = 'e2e-admin-2'`); n < 5 {
+			t.Errorf("only %d uses of the new token were written by the shutdown, want at least 5", n)
+		}
+		g.start()
+		if code, body := call(auditorToken, "GET", "/admin/v1/tokens", ""); code != 200 || !strings.Contains(body, `"id":"e2e-admin-2"`) || strings.Contains(body, `"e2e-operator"`) {
+			t.Errorf("tokens after the restart: %d %s", code, body)
 		}
 	})
 

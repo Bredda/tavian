@@ -434,3 +434,31 @@ func TestConfigNeverFollowsARedirectWithTheToken(t *testing.T) {
 		t.Error("the token followed a redirect")
 	}
 }
+
+func TestConfigTokens(t *testing.T) {
+	g := newFakeGateway(t)
+	g.json("GET /admin/v1/tokens", `{"tokens":[
+	  {"id":"ops-alice","role":"admin","expires_at":"2027-03-01T00:00:00Z","expired":false,"last_used_at":"2026-10-10T12:00:00Z","last_remote":"10.0.0.7","uses":42},
+	  {"id":"old","role":"operator","expires_at":"2020-01-01T00:00:00Z","expired":true,"uses":0},
+	  {"id":"audit-bob","role":"auditor","expired":false,"uses":0}]}`)
+	out, _, code := cli(t, "tokens")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 4 || !strings.HasPrefix(lines[0], "ID") {
+		t.Fatalf("table:\n%s", out)
+	}
+	if !strings.Contains(lines[1], "ops-alice") || !strings.Contains(lines[1], "admin") || !strings.Contains(lines[1], "10.0.0.7") || !strings.Contains(lines[1], "42") ||
+		!strings.Contains(lines[2], "(expired)") || !strings.Contains(lines[2], "never") ||
+		!strings.Contains(lines[3], "never") || strings.Contains(lines[3], "expired") {
+		t.Errorf("table:\n%s", out)
+	}
+	if out, _, _ = cli(t, "tokens", "-json"); !strings.HasPrefix(out, "{\"tokens\"") {
+		t.Errorf("-json: %s", out)
+	}
+	g.fail("GET /admin/v1/tokens", 403, "forbidden", "no")
+	if _, stderr, code := cli(t, "tokens"); code != 1 || !strings.Contains(stderr, "forbidden") {
+		t.Errorf("refused: %d %q", code, stderr)
+	}
+}

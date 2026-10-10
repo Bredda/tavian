@@ -40,6 +40,7 @@ Commands:
   rollback   Make an earlier revision the active one again
   reload     Make the gateway read its configuration file again
   history    List the changes the administrators made
+  tokens     List the admin tokens: role, expiry and last use
 
 Every command takes -server and -json (print the API's answer as it is).
 `
@@ -56,7 +57,7 @@ func cmdConfig(args []string, stdout, stderr io.Writer) int {
 	commands := map[string]func([]string, io.Writer, io.Writer) int{
 		"list": cmdConfigList, "show": cmdConfigShow, "export": cmdConfigExport, "diff": cmdConfigDiff,
 		"validate": cmdConfigValidate, "apply": cmdConfigApply, "rollback": cmdConfigRollback,
-		"reload": cmdConfigReload, "history": cmdConfigHistory,
+		"reload": cmdConfigReload, "history": cmdConfigHistory, "tokens": cmdConfigTokens,
 	}
 	run, ok := commands[args[0]]
 	if !ok {
@@ -692,6 +693,49 @@ func cmdConfigHistory(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(tw, "WHEN\tWHO\tACTION\tOUTCOME\tREVISION\tFROM")
 	for _, ch := range page.Changes {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", ch.OccurredAt.Local().Format("2006-01-02 15:04:05"), ch.Actor, ch.Action, ch.Outcome, ch.Target, ch.RemoteAddr)
+	}
+	_ = tw.Flush()
+	return 0
+}
+
+func cmdConfigTokens(args []string, stdout, stderr io.Writer) int {
+	c, cn, _, code, ok := begin("tokens", args, stderr, plain)
+	if !ok {
+		return code
+	}
+	var page struct {
+		Tokens []struct {
+			ID         string     `json:"id"`
+			Role       string     `json:"role"`
+			ExpiresAt  *time.Time `json:"expires_at"`
+			Expired    bool       `json:"expired"`
+			LastUsedAt *time.Time `json:"last_used_at"`
+			LastRemote string     `json:"last_remote"`
+			Uses       int64      `json:"uses"`
+		} `json:"tokens"`
+	}
+	raw, err := c.call("GET", "/admin/v1/tokens", nil, &page)
+	if err != nil {
+		return fail(stderr, "tokens", err)
+	}
+	if cn.raw(stdout, raw) {
+		return 0
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tROLE\tEXPIRES\tLAST USED\tFROM\tUSES")
+	for _, t := range page.Tokens {
+		expires := "never"
+		if t.ExpiresAt != nil {
+			expires = t.ExpiresAt.Local().Format("2006-01-02 15:04")
+			if t.Expired {
+				expires += " (expired)"
+			}
+		}
+		last := "never"
+		if t.LastUsedAt != nil {
+			last = t.LastUsedAt.Local().Format("2006-01-02 15:04:05")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\n", t.ID, t.Role, expires, last, t.LastRemote, t.Uses)
 	}
 	_ = tw.Flush()
 	return 0

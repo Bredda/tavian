@@ -219,7 +219,9 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	}
 	metrics := server.NewMetrics()
 	metrics.WatchAPIKeys(holder, time.Now)
+	metrics.WatchAdminTokens(holder, time.Now)
 	logKeyExpiries(log, snap, time.Now())
+	logAdminTokenExpiries(log, snap, time.Now())
 	logInspection(log, snap)
 	logPolicies(log, snap)
 	var authn auth.Authenticator = auth.APIKeyAuthenticator{Snap: holder}
@@ -295,6 +297,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 			snap = active
 			holder.Store(snap)
 			logKeyExpiries(log, snap, time.Now())
+			logAdminTokenExpiries(log, snap, time.Now())
 			logInspection(log, snap)
 			logPolicies(log, snap)
 		}
@@ -329,8 +332,22 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		// No WriteTimeout: streamed completions can legitimately last minutes.
 	}
 	adminAPI := &admin.Deps{Log: log, Control: ctl}
+	usesDone := make(chan struct{})
+	stopUses := func() {}
 	if st != nil {
 		adminAPI.Store = st
+		// The use of the admin tokens is counted in memory and written every
+		// few seconds; the last write is made once the listeners are drained.
+		adminAPI.Uses = admin.NewUses()
+		var usesCtx context.Context
+		usesCtx, stopUses = context.WithCancel(context.Background())
+		defer stopUses()
+		go func() {
+			defer close(usesDone)
+			adminAPI.Uses.Run(usesCtx, st, cfg.Admin.UseFlushEvery, log)
+		}()
+	} else {
+		close(usesDone)
 	}
 	adminSrv := &http.Server{
 		Addr:              cfg.Listen.Admin,
@@ -380,6 +397,8 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	// Requests are done: stop the replay loop and let it empty the spool once.
 	stopFlush()
 	<-flushed
+	stopUses()
+	<-usesDone
 	stopWorkers()
 	<-workersDone
 	return code
@@ -552,6 +571,18 @@ func logKeyExpiries(log *slog.Logger, snap *config.Snapshot, now time.Time) {
 	}
 	if len(e.Soon) > 0 {
 		log.Warn("API keys expire within 14 days", "keys", e.Soon)
+	}
+}
+
+// logAdminTokenExpiries names the admin tokens that have expired or will soon,
+// like logKeyExpiries does for API keys.
+func logAdminTokenExpiries(log *slog.Logger, snap *config.Snapshot, now time.Time) {
+	e := snap.AdminTokenExpiries(now, keyExpiryWarning)
+	if len(e.Expired) > 0 {
+		log.Warn("admin tokens past their expires_at are refused", "tokens", e.Expired)
+	}
+	if len(e.Soon) > 0 {
+		log.Warn("admin tokens expire within 14 days", "tokens", e.Soon)
 	}
 }
 

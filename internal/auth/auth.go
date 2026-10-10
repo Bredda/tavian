@@ -58,7 +58,10 @@ type Admin struct {
 // administration tokens of the current config snapshot. Data-plane API keys
 // and OIDC tokens are not accepted, and administration tokens are not
 // accepted by the data plane (they are not in its key table).
-type AdminAuthenticator struct{ Snap *config.Holder }
+type AdminAuthenticator struct {
+	Snap *config.Holder
+	Now  func() time.Time // for tests; defaults to time.Now
+}
 
 // Authenticate returns the administrator behind r, or an ErrUnauthenticated.
 func (a AdminAuthenticator) Authenticate(r *http.Request) (*Admin, error) {
@@ -73,6 +76,14 @@ func (a AdminAuthenticator) Authenticate(r *http.Request) (*Admin, error) {
 	t, ok := s.AdminTokens[HashKey(token)]
 	if !ok {
 		return nil, unauthenticated("unknown admin token")
+	}
+	now := time.Now
+	if a.Now != nil {
+		now = a.Now
+	}
+	if t.Expired(now()) {
+		// the caller is told no more than for an unknown token; the log names it
+		return nil, unauthenticated("admin token " + t.ID + " expired")
 	}
 	return &Admin{TokenID: t.ID, Role: t.Role}, nil
 }

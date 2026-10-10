@@ -384,6 +384,10 @@ type APIKey struct {
 // tokens the API is not served at all.
 type AdminConfig struct {
 	Tokens []AdminToken `yaml:"tokens"`
+	// UseFlushEvery is how often the last use of each token is written to the
+	// database (default 30s). Nothing is written per request. Changing it
+	// needs a restart.
+	UseFlushEvery time.Duration `yaml:"use_flush_every"`
 }
 
 // AdminToken is one credential of the administration API. Its id names the
@@ -393,6 +397,14 @@ type AdminToken struct {
 	ID   string `yaml:"id"`
 	Hash string `yaml:"hash"` // "sha256:<64 hex>", from `tavian keygen -admin`
 	Role Role   `yaml:"role"` // admin, operator or auditor; required
+	// ExpiresAt is the instant from which the token is refused (RFC 3339, or a
+	// plain date meaning 00:00 UTC). Zero: the token does not expire.
+	ExpiresAt time.Time `yaml:"expires_at"`
+}
+
+// Expired says whether the token is refused at now.
+func (t AdminToken) Expired(now time.Time) bool {
+	return !t.ExpiresAt.IsZero() && !now.Before(t.ExpiresAt)
 }
 
 // Role is what an administration token may do (docs/ADMIN_API.md).
@@ -532,6 +544,9 @@ func (c *Config) applyDefaults() {
 		c.Limits.ShutdownGrace = 30 * time.Second
 	}
 	c.Inspection.ApplyDefaults()
+	if c.Admin.UseFlushEvery == 0 {
+		c.Admin.UseFlushEvery = 30 * time.Second
+	}
 	if c.Quota.DefaultOutputTokens == 0 {
 		c.Quota.DefaultOutputTokens = 1024
 	}

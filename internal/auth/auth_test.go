@@ -182,3 +182,27 @@ func TestAdminAuthenticator(t *testing.T) {
 		t.Errorf("the data plane accepted an admin token: %v", err)
 	}
 }
+
+func TestAdminTokenExpiry(t *testing.T) {
+	token, _, _ := GenerateAdminToken()
+	at := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	h := &config.Holder{}
+	h.Store(&config.Snapshot{AdminTokens: map[string]*config.AdminToken{
+		HashKey(token): {ID: "ops-alice", Role: config.RoleAdmin, ExpiresAt: at},
+	}})
+	clock := at.Add(-time.Second)
+	a := AdminAuthenticator{Snap: h, Now: func() time.Time { return clock }}
+	if _, err := a.Authenticate(req("Bearer " + token)); err != nil {
+		t.Errorf("before the expiry: %v", err)
+	}
+	clock = at
+	_, err := a.Authenticate(req("Bearer " + token))
+	if !errors.Is(err, ErrUnauthenticated) || !strings.Contains(Reason(err), "ops-alice") || !strings.Contains(Reason(err), "expired") || strings.Contains(Reason(err), token) {
+		t.Errorf("at the expiry: %v (reason %q)", err, Reason(err))
+	}
+	// without a clock of its own it uses the time of day: a token that expired long ago is refused
+	h.Store(&config.Snapshot{AdminTokens: map[string]*config.AdminToken{HashKey(token): {ID: "old", Role: config.RoleAdmin, ExpiresAt: at.AddDate(-10, 0, 0)}}})
+	if _, err := (AdminAuthenticator{Snap: h}).Authenticate(req("Bearer " + token)); !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("an old token: %v", err)
+	}
+}

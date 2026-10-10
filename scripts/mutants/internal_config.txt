@@ -14,3 +14,9 @@ internal/config/snapshot.go	if !t.Role.Valid() {	if false {
 internal/config/snapshot.go	!s.HasAdmin() && len(errs) == adminErrs {	false && len(errs) == adminErrs {
 internal/config/snapshot.go	if t.Role == RoleAdmin {	if t.Role == RoleAdmin || true {
 internal/config/config.go	return r == RoleAdmin || r == RoleOperator || r == RoleAuditor }	return r == RoleAdmin || r == RoleOperator }
+internal/config/config.go	return !t.ExpiresAt.IsZero() && !now.Before(t.ExpiresAt)	return !t.ExpiresAt.IsZero() && now.After(t.ExpiresAt)
+internal/config/snapshot.go	if t.Role == RoleAdmin && !t.Expired(now) {	if t.Role == RoleAdmin {
+internal/config/snapshot.go	f < time.Second || f > time.Hour	f < time.Second || f > 1000*time.Hour
+internal/config/snapshot.go	f < time.Second || f > time.Hour	f < 0 || f > time.Hour
+internal/config/snapshot.go	e = append(e, expiring{t.ID, t.ExpiresAt})	_ = t
+internal/config/config.go	c.Admin.UseFlushEvery = 30 * time.Second	c.Admin.UseFlushEvery = 31 * time.Second

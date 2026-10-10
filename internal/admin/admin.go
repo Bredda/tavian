@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"sort"
 	"strconv"
 	"time"
 
@@ -42,6 +43,7 @@ type Store interface {
 	GetRevision(ctx context.Context, id string) (store.StoredRevision, error)
 	ListRevisions(ctx context.Context, limit int, before int64) ([]store.StoredRevision, int64, error)
 	ActiveRevision(ctx context.Context) (store.Active, bool, error)
+	TokenUses(ctx context.Context) (map[string]store.TokenUse, error)
 }
 
 // Rejection is returned by a change that was refused: the configuration is
@@ -132,7 +134,9 @@ type Deps struct {
 	Store Store
 	// Control changes the configuration; without one the API only reads.
 	Control Controller
-	Log     *slog.Logger
+	// Uses counts the use of the tokens; without it nothing is counted.
+	Uses *Uses
+	Log  *slog.Logger
 	// Observe counts calls by action and outcome, for metrics. May be nil.
 	Observe func(action, outcome string)
 	// Now is the clock; nil means time.Now.
@@ -205,6 +209,7 @@ type route struct {
 var routes = []route{
 	{RouteInfo{"GET", "/whoami", PermRead, false}, "whoami", (*api).whoami},
 	{RouteInfo{"GET", "/config", PermRead, false}, "config.show", (*api).configShow},
+	{RouteInfo{"GET", "/tokens", PermRead, false}, "tokens.list", (*api).tokens},
 	{RouteInfo{"GET", "/changes", PermRead, false}, "changes.list", (*api).changes},
 	{RouteInfo{"GET", "/config/revisions", PermRead, false}, "revisions.list", (*api).revisions},
 	{RouteInfo{"GET", "/config/revisions/{id}", PermRead, false}, "revisions.show", (*api).revision},
@@ -227,7 +232,7 @@ func Routes() []RouteInfo {
 // Register adds the API to mux. The routes answer 404 while no admin token is
 // configured.
 func Register(mux *http.ServeMux, d Deps) {
-	a := &api{Deps: d, auth: auth.AdminAuthenticator{Snap: d.Snap}}
+	a := &api{Deps: d, auth: auth.AdminAuthenticator{Snap: d.Snap, Now: d.Now}}
 	for _, r := range routes {
 		mux.HandleFunc(r.Method+" "+Prefix+r.Path, a.handle(r, func(w http.ResponseWriter, req *http.Request, c call) { r.h(a, w, req, c) }))
 	}
@@ -274,6 +279,9 @@ func (a *api) handle(rt route, h handler) http.HandlerFunc {
 			return
 		}
 		c := call{actor: who.TokenID, role: who.Role, requestID: id, remote: remoteHost(r)}
+		if a.Uses != nil {
+			a.Uses.Touch(who.TokenID, a.now(), c.remote)
+		}
 		if !Allows(who.Role, rt.Permission) {
 			a.forbid(w, r, c, rt)
 			return
@@ -305,6 +313,53 @@ func remoteHost(r *http.Request) string {
 
 func (a *api) whoami(w http.ResponseWriter, _ *http.Request, c call) {
 	writeJSON(w, http.StatusOK, map[string]string{"actor": c.actor, "method": "admin_token", "role": string(c.role)})
+}
+
+// tokenInfo is what the API says about a token: never its hash.
+type tokenInfo struct {
+	ID         string      `json:"id"`
+	Role       config.Role `json:"role"`
+	ExpiresAt  *time.Time  `json:"expires_at,omitempty"`
+	Expired    bool        `json:"expired"`
+	LastUsedAt *time.Time  `json:"last_used_at,omitempty"`
+	LastRemote string      `json:"last_remote,omitempty"`
+	Uses       int64       `json:"uses"`
+}
+
+func (a *api) tokens(w http.ResponseWriter, r *http.Request, _ call) {
+	var stored map[string]store.TokenUse
+	if a.Store != nil {
+		var err error
+		if stored, err = a.Store.TokenUses(r.Context()); err != nil {
+			a.Log.ErrorContext(r.Context(), "reading the use of the admin tokens failed", "error", err)
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "the use of the tokens cannot be read")
+			return
+		}
+	}
+	var pending map[string]store.TokenUse
+	if a.Uses != nil {
+		pending = a.Uses.Pending()
+	}
+	now := a.now()
+	out := []tokenInfo{}
+	for _, t := range a.Snap.Load().AdminTokens {
+		ti := tokenInfo{ID: t.ID, Role: t.Role, Expired: t.Expired(now)}
+		if !t.ExpiresAt.IsZero() {
+			e := t.ExpiresAt.UTC()
+			ti.ExpiresAt = &e
+		}
+		// what is in the database, and what has not been written yet
+		for _, u := range []store.TokenUse{stored[t.ID], pending[t.ID]} {
+			ti.Uses += u.Uses
+			if !u.LastUsedAt.IsZero() && (ti.LastUsedAt == nil || !u.LastUsedAt.Before(*ti.LastUsedAt)) {
+				l := u.LastUsedAt.UTC()
+				ti.LastUsedAt, ti.LastRemote = &l, u.LastRemote
+			}
+		}
+		out = append(out, ti)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": out})
 }
 
 func (a *api) configShow(w http.ResponseWriter, _ *http.Request, _ call) {

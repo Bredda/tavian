@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -155,3 +156,32 @@ func TestAnAdminTokenIsNotADataPlaneKey(t *testing.T) {
 }
 
 func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
+func TestAdminTokenExpiryMetrics(t *testing.T) {
+	now := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	holder := &config.Holder{}
+	holder.Store(&config.Snapshot{AdminTokens: map[string]*config.AdminToken{
+		"h1": {ID: "gone", ExpiresAt: now.Add(-time.Hour)},
+		"h2": {ID: "soon", ExpiresAt: now.Add(48 * time.Hour)},
+		"h3": {ID: "none"},
+	}})
+	m := NewMetrics()
+	m.WatchAdminTokens(holder, func() time.Time { return now })
+	scrape := func() string {
+		rec := httptest.NewRecorder()
+		m.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+		return grepLines(rec.Body.String(), "tavian_admin_tokens") + "\n"
+	}
+	out := scrape()
+	if !strings.Contains(out, "tavian_admin_tokens_expired 1\n") || !strings.Contains(out, "tavian_admin_tokens_next_expiry_seconds 172800\n") {
+		t.Errorf("metrics:\n%s", out)
+	}
+	if strings.Contains(out, "gone") || strings.Contains(out, "soon") {
+		t.Errorf("a token id is in the metrics:\n%s", out)
+	}
+	// no tokens, no metrics: a gateway without the API has nothing to alert on
+	holder.Store(&config.Snapshot{})
+	if out := scrape(); strings.Contains(out, "\ntavian_admin_tokens_expired ") || strings.HasPrefix(out, "tavian_admin_tokens_expired ") {
+		t.Errorf("metrics without tokens:\n%s", out)
+	}
+}

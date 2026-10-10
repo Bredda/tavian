@@ -39,3 +39,18 @@ internal/admin/admin.go	return slices.Contains(permissions[role], p)	return slic
 internal/admin/admin.go	a.observe(rt.action, "forbidden")	a.observe(rt.action, "rejected")
 internal/admin/admin.go	map[string]string{"code": "forbidden", "role": string(c.role)}	map[string]string{"code": "forbidden"}
 internal/admin/admin.go	writeError(w, http.StatusForbidden, "forbidden",	writeError(w, http.StatusUnauthorized, "forbidden",
+internal/admin/usage.go	e.Uses++	e.Uses += 2
+internal/admin/usage.go	if !now.Before(e.LastUsedAt) {	if now.Before(e.LastUsedAt) {
+internal/admin/usage.go	clear(u.pending)	_ = u.pending
+internal/admin/usage.go	e.Uses += it.Uses	e.Uses = it.Uses
+internal/admin/usage.go	if it.LastUsedAt.After(e.LastUsedAt) {	if !it.LastUsedAt.After(e.LastUsedAt) {
+internal/admin/usage.go	u.Restore(items)	_ = items
+internal/admin/usage.go	if len(items) == 0 {	if len(items) == 1 {
+internal/admin/admin.go	{RouteInfo{"GET", "/tokens", PermRead, false}	{RouteInfo{"GET", "/tokens", PermChange, false}
+internal/admin/admin.go	Expired: t.Expired(now)}	Expired: t.Expired(now) && false}
+internal/admin/admin.go	!u.LastUsedAt.IsZero() && (ti.LastUsedAt == nil || !u.LastUsedAt.Before(*ti.LastUsedAt))	!u.LastUsedAt.IsZero() && ti.LastUsedAt == nil
+internal/admin/admin.go	ti.Uses += u.Uses	ti.Uses = u.Uses
+internal/admin/admin.go	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })	_ = sort.Slice
+internal/admin/admin.go	auth.AdminAuthenticator{Snap: d.Snap, Now: d.Now}	auth.AdminAuthenticator{Snap: d.Snap}
+internal/admin/admin.go	a.Uses.Touch(who.TokenID, a.now(), c.remote)	_ = who
+internal/admin/usage.go			flush(context.Background())			_ = flush

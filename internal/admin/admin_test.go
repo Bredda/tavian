@@ -28,6 +28,7 @@ type fakeStore struct {
 	changes   []store.AdminChange
 	revisions []store.StoredRevision // oldest first
 	active    string
+	uses      map[string]store.TokenUse
 	failOn    bool
 }
 
@@ -87,6 +88,13 @@ func (f *fakeStore) ListRevisions(_ context.Context, limit int, _ int64) ([]stor
 	return out, 0, nil
 }
 
+func (f *fakeStore) TokenUses(context.Context) (map[string]store.TokenUse, error) {
+	if f.failOn {
+		return nil, errDown
+	}
+	return f.uses, nil
+}
+
 func (f *fakeStore) ActiveRevision(context.Context) (store.Active, bool, error) {
 	if f.failOn {
 		return store.Active{}, false, errDown
@@ -142,6 +150,7 @@ type fixture struct {
 	store    *fakeStore
 	control  *fakeControl
 	holder   *config.Holder
+	uses     *Uses
 	observed []string
 }
 
@@ -173,8 +182,9 @@ func newFixture(t *testing.T) *fixture {
 
 func (f *fixture) serve(t *testing.T, c Controller) *httptest.Server {
 	t.Helper()
+	f.uses = NewUses()
 	d := Deps{
-		Snap: f.holder, Store: f.store, Log: slog.New(slog.DiscardHandler),
+		Snap: f.holder, Store: f.store, Log: slog.New(slog.DiscardHandler), Uses: f.uses,
 		Observe: func(action, outcome string) { f.observed = append(f.observed, action+":"+outcome) },
 		Now:     func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) },
 	}
@@ -230,7 +240,7 @@ func errCode(t *testing.T, body string) string {
 }
 
 var allRoutes = []struct{ method, path string }{
-	{"GET", "/admin/v1/whoami"}, {"GET", "/admin/v1/config"}, {"GET", "/admin/v1/changes"},
+	{"GET", "/admin/v1/whoami"}, {"GET", "/admin/v1/config"}, {"GET", "/admin/v1/tokens"}, {"GET", "/admin/v1/changes"},
 	{"GET", "/admin/v1/config/revisions"}, {"GET", "/admin/v1/config/revisions/active"},
 	{"GET", "/admin/v1/config/diff?from=active"},
 	{"POST", "/admin/v1/config/validate"}, {"POST", "/admin/v1/config/reload"},
@@ -626,6 +636,7 @@ func TestAuthenticationFailureIsLoggedWithoutTheCredential(t *testing.T) {
 // table of routes cannot hide behind itself
 var expectedAccess = map[string]map[config.Role]bool{
 	"GET /admin/v1/whoami":                {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
+	"GET /admin/v1/tokens":                {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
 	"GET /admin/v1/config":                {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
 	"GET /admin/v1/changes":               {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
 	"GET /admin/v1/config/revisions":      {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
@@ -782,5 +793,120 @@ func TestTheRolesCanDoWhatTheyMay(t *testing.T) {
 	}
 	if res, body := f.do(t, "GET", "/admin/v1/whoami", secretA, ""); !strings.Contains(body, `"role":"auditor"`) || res.StatusCode != 200 {
 		t.Errorf("auditor whoami: %d %s", res.StatusCode, body)
+	}
+}
+
+func TestTokensAreListedWithTheirExpiryAndUse(t *testing.T) {
+	f := newFixture(t)
+	f.holder.Store(&config.Snapshot{Revision: "aaaaaaaaaaaa", AdminTokens: map[string]*config.AdminToken{
+		auth.HashKey(secret):       {ID: "alice", Role: config.RoleAdmin, ExpiresAt: t0.Add(24 * time.Hour)},
+		auth.HashKey(secretA):      {ID: "aude", Role: config.RoleAuditor},
+		auth.HashKey("tavadm_old"): {ID: "old", Role: config.RoleOperator, ExpiresAt: t0.Add(-time.Hour)},
+	}})
+	// written earlier, and not written yet
+	f.store.uses = map[string]store.TokenUse{
+		"alice": {TokenID: "alice", Uses: 10, LastUsedAt: t0.Add(-time.Hour), LastRemote: "10.0.0.1"},
+		"gone":  {TokenID: "gone", Uses: 5, LastUsedAt: t0.Add(-time.Hour)},
+	}
+	res, body := f.do(t, "GET", "/admin/v1/tokens", secretA, "")
+	var out struct{ Tokens []tokenInfo }
+	if err := json.Unmarshal([]byte(body), &out); err != nil || res.StatusCode != 200 || len(out.Tokens) != 3 {
+		t.Fatalf("tokens: %d %s", res.StatusCode, body)
+	}
+	by := map[string]tokenInfo{}
+	for _, ti := range out.Tokens {
+		by[ti.ID] = ti
+	}
+	if out.Tokens[0].ID != "alice" || out.Tokens[1].ID != "aude" || out.Tokens[2].ID != "old" {
+		t.Errorf("not sorted by id: %v", out.Tokens)
+	}
+	if _, listed := by["gone"]; listed {
+		t.Error("a token that left the configuration is still listed")
+	}
+	al := by["alice"]
+	if al.Role != config.RoleAdmin || al.Expired || al.ExpiresAt == nil || !al.ExpiresAt.Equal(t0.Add(24*time.Hour)) {
+		t.Errorf("alice = %+v", al)
+	}
+	if !by["old"].Expired || by["aude"].ExpiresAt != nil || by["aude"].Expired {
+		t.Errorf("expiry: old=%+v aude=%+v", by["old"], by["aude"])
+	}
+	// alice made no call yet: what was written earlier is all there is
+	if al.Uses != 10 || al.LastUsedAt == nil || !al.LastUsedAt.Equal(t0.Add(-time.Hour)) || al.LastRemote != "10.0.0.1" {
+		t.Errorf("alice before calling = %+v", al)
+	}
+	res, body = f.do(t, "GET", "/admin/v1/tokens", secret, "")
+	_ = res
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, ti := range out.Tokens {
+		by[ti.ID] = ti
+	}
+	if al = by["alice"]; al.Uses != 11 || al.LastUsedAt == nil || !al.LastUsedAt.Equal(t0) || al.LastRemote != "127.0.0.1" {
+		t.Errorf("alice after calling: %+v", al)
+	}
+	if aude := by["aude"]; aude.Uses != 1 || aude.LastUsedAt == nil {
+		t.Errorf("aude: %+v", aude)
+	}
+	if strings.Contains(body, auth.HashKey(secret)) || strings.Contains(body, "hash") || strings.Contains(body, secret) {
+		t.Errorf("the listing shows a secret: %s", body)
+	}
+	f.store.failOn = true
+	if res, body := f.do(t, "GET", "/admin/v1/tokens", secret, ""); res.StatusCode != 503 || strings.Contains(body, "database down") {
+		t.Errorf("store down: %d %s", res.StatusCode, body)
+	}
+}
+
+func TestOnlyAuthenticatedCallsAreCounted(t *testing.T) {
+	f := newFixture(t)
+	f.do(t, "GET", "/admin/v1/whoami", "tavadm_guess", "")
+	f.do(t, "GET", "/admin/v1/whoami", "", "")
+	f.do(t, "GET", "/admin/v1/whoami", secret, "")
+	f.do(t, "POST", "/admin/v1/config/apply", secretA, `{}`) // refused for its role: the token was used
+	p := f.uses.Pending()
+	if len(p) != 2 || p["alice"].Uses != 1 || p["aude"].Uses != 1 {
+		t.Errorf("pending = %+v", p)
+	}
+}
+
+func TestAnExpiredTokenIsRefusedLikeAnUnknownOne(t *testing.T) {
+	f := newFixture(t)
+	f.holder.Store(&config.Snapshot{Revision: "aaaaaaaaaaaa", AdminTokens: map[string]*config.AdminToken{
+		auth.HashKey(secret):     {ID: "alice", Role: config.RoleAdmin},
+		auth.HashKey("tavadm_x"): {ID: "stale", Role: config.RoleAdmin, ExpiresAt: t0}, // expires at this very instant
+		auth.HashKey("tavadm_y"): {ID: "fresh", Role: config.RoleAdmin, ExpiresAt: t0.Add(time.Nanosecond)},
+	}})
+	r1, b1 := f.do(t, "GET", "/admin/v1/whoami", "tavadm_x", "")
+	r2, b2 := f.do(t, "GET", "/admin/v1/whoami", "tavadm_nope", "")
+	if r1.StatusCode != 401 || r2.StatusCode != 401 || b1 != b2 || r1.Header.Get("WWW-Authenticate") != r2.Header.Get("WWW-Authenticate") {
+		t.Errorf("expired %d %s / unknown %d %s: the caller must not be able to tell", r1.StatusCode, b1, r2.StatusCode, b2)
+	}
+	if res, _ := f.do(t, "GET", "/admin/v1/whoami", "tavadm_y", ""); res.StatusCode != 200 {
+		t.Errorf("a token that has not expired yet: %d", res.StatusCode)
+	}
+	if p := f.uses.Pending(); p["stale"].Uses != 0 {
+		t.Errorf("a refused token was counted as used: %+v", p)
+	}
+}
+
+func TestARemovedTokenIsRefusedAtOnce(t *testing.T) {
+	f := newFixture(t)
+	if res, _ := f.do(t, "GET", "/admin/v1/whoami", secretO, ""); res.StatusCode != 200 {
+		t.Fatalf("operator: %d", res.StatusCode)
+	}
+	s := f.holder.Load()
+	next := *s
+	next.AdminTokens = map[string]*config.AdminToken{}
+	for h, tk := range s.AdminTokens {
+		if tk.ID != "olivia" {
+			next.AdminTokens[h] = tk
+		}
+	}
+	f.holder.Store(&next) // what applying or reloading a configuration does
+	if res, _ := f.do(t, "GET", "/admin/v1/whoami", secretO, ""); res.StatusCode != 401 {
+		t.Errorf("a removed token still works: %d", res.StatusCode)
+	}
+	if res, _ := f.do(t, "GET", "/admin/v1/whoami", secret, ""); res.StatusCode != 200 {
+		t.Errorf("the others stopped working: %d", res.StatusCode)
 	}
 }
