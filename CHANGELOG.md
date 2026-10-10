@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/Bredda/tavian/compare/v0.2.0...v0.3.0) (2026-10-10)
+
+
+### Features
+
+* **admin:** add the administration API with its own tokens and recorded changes ([#132](https://github.com/Bredda/tavian/issues/132)) ([0c16715](https://github.com/Bredda/tavian/commit/0c16715bf0c326b33f0a99887d618ee9f63e14e7))
+* **admin:** expire, rotate and revoke admin tokens, and see their last use ([#138](https://github.com/Bredda/tavian/issues/138)) ([bd0c83d](https://github.com/Bredda/tavian/commit/bd0c83d08d0f15f714200a10807648960a5f8c2d))
+* **admin:** give admin tokens a role: admin, operator or auditor ([#137](https://github.com/Bredda/tavian/issues/137)) ([cedd121](https://github.com/Bredda/tavian/commit/cedd1217975915ec1cce1b266b499d82d361e8c2))
+* **admin:** list, compare, validate, apply and roll back configuration revisions ([#135](https://github.com/Bredda/tavian/issues/135)) ([415536d](https://github.com/Bredda/tavian/commit/415536df657ea5696a5b0c74fa1729afaac0e83e))
+* **audit:** a read-only database role and an export of the chain for the auditor ([#139](https://github.com/Bredda/tavian/issues/139)) ([6b14011](https://github.com/Bredda/tavian/commit/6b140115d25d7fc4c6126a347ff91e0a323c8568))
+* **config:** add tavian config, the command line of the admin API ([#136](https://github.com/Bredda/tavian/issues/136)) ([3b9397d](https://github.com/Bredda/tavian/commit/3b9397dd1683c250249f39247f4e547e1818bc6c))
+
+
+### Documentation
+
+* add a Bruno collection with the demo scenario and the API ([#122](https://github.com/Bredda/tavian/issues/122)) ([6c7c3d4](https://github.com/Bredda/tavian/commit/6c7c3d458b38431b6f8981787fb12e6d96fe81e8))
+* require a DCO sign-off and fix the Go version policy ([#125](https://github.com/Bredda/tavian/issues/125)) ([f35c9c4](https://github.com/Bredda/tavian/commit/f35c9c4d87066af30a18d5ae5f630693c6aa728d))
+* track the work in GitHub issues, milestones and a project ([#98](https://github.com/Bredda/tavian/issues/98)) ([d4a3e73](https://github.com/Bredda/tavian/commit/d4a3e7306416dc2b819ac2838c2623deef8cf991))
+
 ## [0.2.0](https://github.com/Bredda/tavian/compare/v0.1.0...v0.2.0) (2026-10-09)
 
 
