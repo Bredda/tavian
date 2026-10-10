@@ -2,17 +2,35 @@
 # file	old	new
 internal/admin/admin.go	if !Enabled(a.Snap) {	if !Enabled(a.Snap) && false {
 internal/admin/admin.go	call{actor: who.TokenID,	call{actor: who.TokenID + "x",
-internal/admin/admin.go	case recordErr != nil:	case false:
-internal/admin/admin.go	"", store.OutcomeRejected,	"", store.OutcomeApplied,
 internal/admin/admin.go	status = http.StatusUnprocessableEntity	status = http.StatusBadRequest
-internal/admin/admin.go	n < 1 || n > 500	n < 1 || n > 5000
-internal/admin/admin.go	err != nil || n < 1 {	err != nil || n < 0 {
 internal/admin/admin.go	if next > 0 {	if next >= 0 {
 internal/admin/admin.go	hd.Set("Cache-Control", "no-store")	hd.Set("Cache-Control", "no-cache")
 internal/admin/admin.go	if !ids.Valid(id) {	if ids.Valid(id) {
 internal/admin/admin.go	host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil	host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil
-internal/admin/admin.go	if a.Reload == nil {	if a.Reload != nil {
 internal/admin/admin.go	hd.Set("WWW-Authenticate", `Bearer realm="tavian-admin"`)	hd.Set("WWW-Authenticate", `Bearer`)
-internal/admin/admin.go	a.observe(ActionReload, "audit_unavailable")	a.observe(ActionReload, "failed")
 internal/admin/admin.go	if list == nil {	if false {
 internal/admin/admin.go	s != nil && len(s.AdminTokens) > 0	s != nil
+internal/admin/admin.go	if req.Base == "" {	if false {
+internal/admin/admin.go	if req.Base == "" || !revisionID.MatchString(req.Revision) {	if req.Base == "" {
+internal/admin/admin.go	dec.DisallowUnknownFields()	_ = dec
+internal/admin/admin.go	case errors.Is(err, ErrAuditUnavailable):	case false:
+internal/admin/admin.go	if a.Control == nil {	if a.Control != nil {
+internal/admin/revisions.go	v.ID == active})	true})
+internal/admin/revisions.go	^[0-9a-f]{12}$	[0-9a-f]{12}
+internal/admin/revisions.go	if to == "" {	if false {
+internal/admin/revisions.go	return a.Snap.Load().Revision, nil	return "", nil
+internal/admin/revisions.go	case *before != *after:	case true:
+internal/admin/revisions.go	if id == "active" {	if false {
+internal/admin/diff.go	diffContext = 3	diffContext = 2
+internal/admin/diff.go	case lcs[(i+1)*w+j] >= lcs[i*w+j+1]:	case lcs[(i+1)*w+j] < lcs[i*w+j+1]:
+internal/admin/diff.go	if a[i] == b[j] {	if a[i] != b[j] {
+internal/admin/diff.go	if k == len(ops) || k-end > 2*diffContext {	if k == len(ops) || k-end > diffContext {
+internal/admin/diff.go	diffCells = 4_000_000	diffCells = 4
+internal/admin/diff.go	for pre < len(a) && pre < len(b) && a[pre] == b[pre] {	for pre < len(a) && pre < len(b) && a[pre] != b[pre] {
+internal/admin/diff.go	return fmt.Sprintf("%d,0", start)	return fmt.Sprintf("%d,0", start+1)
+
+internal/admin/admin.go	a.observe(action, "audit_unavailable")	a.observe(action, "failed")
+internal/admin/admin.go	target, store.OutcomeRejected,	target, store.OutcomeApplied,
+internal/admin/revisions.go	err != nil || n < 1 || n > 500	err != nil || n < 1 || n > 5000
+internal/admin/revisions.go	err != nil || n < 1 {	err != nil || n < 0 {
+internal/admin/revisions.go	if errors.Is(err, store.ErrNotFound) {	if errors.Is(err, store.ErrNotFound) && false {

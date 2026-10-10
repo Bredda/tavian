@@ -24,6 +24,23 @@ info:
     `503 audit_unavailable` and nothing changes. Read the history with
     `GET /admin/v1/changes`.
 
+    ## Revisions
+
+    Every configuration the gateway has run is a **revision**: the YAML and the
+    policy files it was made from, identified by 12 hexadecimal characters.
+    One is **active**. `apply` and `rollback` take a `base`, the revision you
+    believe is active: if someone changed it meanwhile the call answers
+    `409 conflict` and nothing happens, so two administrators cannot overwrite
+    each other. Read the active revision with `GET /admin/v1/config`.
+
+    The gateway starts from the configuration file when it changed since the
+    last start, and otherwise from the active revision, so that what was
+    applied here survives a restart. Settings that need a restart (profile,
+    database, audit, workers, outbox, the OIDC connection) cannot be changed
+    here: the call is refused with `409 restart_required`. With several
+    gateways on one database, a change is made on the one you call; the others
+    follow when they restart.
+
     ## Errors
 
     Errors have the shape `{"error": {"code": "...", "message": "..."}}`. The
@@ -82,6 +99,193 @@ paths:
                     type: array
                     items: { type: string }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+  /admin/v1/config/revisions:
+    get:
+      tags: [Configuration]
+      operationId: listRevisions
+      summary: The revisions the gateway has run
+      description: Newest first, without their content.
+      parameters:
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Before" }
+      responses:
+        "200":
+          description: A page of revisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revisions, active]
+                properties:
+                  revisions:
+                    type: array
+                    items: { $ref: "#/components/schemas/RevisionSummary" }
+                  active: { type: string, description: The active revision. }
+                  next:
+                    type: string
+                    description: Pass it as `before` for the following page. Absent on the last page.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /admin/v1/config/revisions/{id}:
+    get:
+      tags: [Configuration]
+      operationId: showRevision
+      summary: A revision with its content
+      description: |
+        The configuration YAML and the policy files, as they would be written to
+        disk. They hold API key and token hashes and environment variable names,
+        never a secret.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A revision id, or `active`.
+          schema: { type: string, examples: [active, 4b7e1c0a9d32] }
+      responses:
+        "200":
+          description: The revision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Revision" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /admin/v1/config/diff:
+    get:
+      tags: [Configuration]
+      operationId: diffRevisions
+      summary: What differs between two revisions
+      description: One entry per file that was added, removed or modified, with a unified diff.
+      parameters:
+        - name: from
+          in: query
+          required: true
+          description: A revision id, or `active`.
+          schema: { type: string }
+        - name: to
+          in: query
+          description: A revision id, or `active` (the default).
+          schema: { type: string, default: active }
+      responses:
+        "200":
+          description: The differences. `files` is empty when the revisions are the same.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, files]
+                properties:
+                  from: { type: string }
+                  to: { type: string }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, status, diff]
+                      properties:
+                        name: { type: string, examples: [tavian.yaml, policies/10-base.yaml] }
+                        status: { type: string, enum: [added, removed, modified] }
+                        diff: { type: string, description: Unified diff. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /admin/v1/config/validate:
+    post:
+      tags: [Configuration]
+      operationId: validateConfig
+      summary: Check a configuration without applying it
+      description: |
+        The same validation as `tavian validate`, plus whether the configuration
+        could replace the running one. Nothing changes and nothing is recorded.
+        A configuration that does not compile is a `200` with `valid: false`;
+        `base` is not needed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Configuration" }
+      responses:
+        "200":
+          description: The verdict.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Validation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+  /admin/v1/config/apply:
+    post:
+      tags: [Configuration]
+      operationId: applyConfig
+      summary: Make a configuration the active one
+      description: |
+        Validates the configuration, records the change, and switches to it. It
+        is refused (`422`, `409`) when it is invalid, needs a restart, lists no
+        admin token (nobody could use the API afterwards), or is not based on the
+        active revision. Policy files come from the request: `policy.dir` of the
+        configuration is not read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/Configuration" }
+                - type: object
+                  required: [base]
+                  properties:
+                    base: { type: string, description: The revision you believe is active. }
+      responses:
+        "200":
+          description: The new revision is running (it equals the previous one when nothing changed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Result" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409": { $ref: "#/components/responses/Refused" }
+        "413":
+          description: The request is larger than 8 MiB.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Refused" }
+        "503": { $ref: "#/components/responses/NotMade" }
+  /admin/v1/config/rollback:
+    post:
+      tags: [Configuration]
+      operationId: rollbackConfig
+      summary: Make an earlier revision the active one again
+      description: |
+        Refused (`409 credentials_would_return`) when that revision holds an API
+        key or admin token that the running configuration does not: it may have
+        been revoked since, and a rollback must not bring it back. Apply a
+        configuration that lists exactly the credentials you want instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision, base]
+              additionalProperties: false
+              properties:
+                revision: { type: string, description: The revision to return to. }
+                base: { type: string, description: The revision you believe is active. }
+      responses:
+        "200":
+          description: The revision is running again.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Result" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Refused" }
+        "422": { $ref: "#/components/responses/Refused" }
+        "503": { $ref: "#/components/responses/NotMade" }
   /admin/v1/config/reload:
     post:
       tags: [Configuration]
@@ -89,31 +293,19 @@ paths:
       summary: Read the configuration file again
       description: |
         Does what `SIGHUP` does: compile the configuration file and its policy
-        files, and switch to the result if it is valid. The change is recorded
-        first. A configuration that is invalid, or that changes a setting which
-        needs a restart, is refused and the running revision stays.
+        directory, and make the result the active revision if it is valid. A
+        configuration that is invalid, or that changes a setting which needs a
+        restart, is refused and the running revision stays.
       responses:
         "200":
           description: The new revision is running (it equals the previous one when the file did not change).
           content:
             application/json:
-              schema:
-                type: object
-                required: [revision, previous]
-                properties:
-                  revision: { type: string }
-                  previous: { type: string }
+              schema: { $ref: "#/components/schemas/Result" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
-        "422":
-          description: The configuration is invalid or cannot be applied to a running gateway. Nothing changed.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "503":
-          description: The change could not be recorded (`audit_unavailable`) or the file could not be read (`unavailable`). Nothing changed.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/Refused" }
+        "422": { $ref: "#/components/responses/Refused" }
+        "503": { $ref: "#/components/responses/NotMade" }
   /admin/v1/changes:
     get:
       tags: [History]
@@ -121,13 +313,8 @@ paths:
       summary: What the administrators changed
       description: Newest first. Each record is also in the audit chain, which `tavian verify-audit` checks.
       parameters:
-        - name: limit
-          in: query
-          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
-        - name: before
-          in: query
-          description: The `next` value of the previous page.
-          schema: { type: string }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Before" }
       responses:
         "200":
           description: A page of changes.
@@ -155,6 +342,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+    Before:
+      name: before
+      in: query
+      description: The `next` value of the previous page.
+      schema: { type: string }
   securitySchemes:
     adminToken:
       type: http
@@ -168,7 +365,94 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: The request is malformed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such revision.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: The database cannot be read.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Refused:
+      description: |
+        The change was refused and nothing changed. `code` is one of
+        `invalid_configuration`, `restart_required`, `no_admin_token`,
+        `conflict`, `credentials_would_return`. The attempt is recorded.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotMade:
+      description: |
+        The change was not made: it could not be recorded (`audit_unavailable`)
+        or the gateway could not carry it out (`unavailable`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    Configuration:
+      type: object
+      required: [config]
+      additionalProperties: false
+      properties:
+        config: { type: string, description: The configuration YAML, as in `tavian.yaml`. }
+        policies:
+          type: array
+          description: The policy files, as in the `policy.dir` directory.
+          items: { $ref: "#/components/schemas/File" }
+        base: { type: string, description: The revision you believe is active (required by apply). }
+    File:
+      type: object
+      required: [name, yaml]
+      additionalProperties: false
+      properties:
+        name: { type: string, description: A plain file name ending in `.yaml` or `.yml`., examples: [10-base.yaml] }
+        yaml: { type: string }
+    Result:
+      type: object
+      required: [revision, previous, unchanged, warnings]
+      properties:
+        revision: { type: string }
+        previous: { type: string }
+        unchanged: { type: boolean }
+        warnings:
+          type: array
+          items: { type: string }
+    Validation:
+      type: object
+      required: [valid, applicable, errors, warnings]
+      properties:
+        valid: { type: boolean, description: The configuration compiles. }
+        applicable: { type: boolean, description: It could replace the running one. }
+        revision: { type: string, description: The revision it would be. }
+        errors: { type: array, items: { type: string } }
+        warnings: { type: array, items: { type: string } }
+        reason: { type: string, description: Why a valid configuration cannot be applied. }
+    RevisionSummary:
+      type: object
+      required: [revision, profile, tavian_version, first_loaded_at, active]
+      properties:
+        revision: { type: string }
+        profile: { type: string }
+        tavian_version: { type: string, description: The version of the gateway that first ran it. }
+        first_loaded_at: { type: string, format: date-time }
+        active: { type: boolean }
+    Revision:
+      allOf:
+        - { $ref: "#/components/schemas/RevisionSummary" }
+        - type: object
+          required: [config, policies]
+          properties:
+            config: { type: string }
+            policies:
+              type: array
+              items: { $ref: "#/components/schemas/File" }
     Error:
       type: object
       required: [error]

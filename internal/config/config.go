@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -399,23 +400,52 @@ func Load(path string) (*Config, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("read config: %w", err)
 	}
-	cfg, err := Parse(raw)
+	dir := filepath.Dir(path)
+	cfg, err := FromRevision(raw, nil, dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	if k := cfg.Audit.SigningKeyFile; k != "" && !filepath.IsAbs(k) {
-		cfg.Audit.SigningKeyFile = filepath.Join(filepath.Dir(path), k)
-	}
 	if cfg.Policy.Dir != "" {
-		dir := cfg.Policy.Dir
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(filepath.Dir(path), dir)
+		pdir := cfg.Policy.Dir
+		if !filepath.IsAbs(pdir) {
+			pdir = filepath.Join(dir, pdir)
 		}
-		if cfg.PolicySources, err = readPolicyDir(dir); err != nil {
+		if cfg.PolicySources, err = readPolicyDir(pdir); err != nil {
 			return nil, nil, err
 		}
 	}
 	return cfg, raw, nil
+}
+
+// policyFileName is what a policy file of a revision may be called: a plain
+// file name as readPolicyDir finds it (no directory part, not hidden), so that
+// exporting a revision to a directory cannot write anywhere else.
+var policyFileName = regexp.MustCompile(`^[^/\\\x00-\x1f.][^/\\\x00-\x1f]*\.ya?ml$`)
+
+// FromRevision builds a Config from the stored form of a revision: the YAML
+// and the policy files it was made from (the ones Load reads from policy.dir).
+// dir is where relative paths of the configuration are resolved from, the
+// directory of the configuration file the gateway started with.
+func FromRevision(raw []byte, policies []policy.Source, dir string) (*Config, error) {
+	cfg, err := Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if k := cfg.Audit.SigningKeyFile; k != "" && !filepath.IsAbs(k) {
+		cfg.Audit.SigningKeyFile = filepath.Join(dir, k)
+	}
+	seen := map[string]bool{}
+	for _, p := range policies {
+		if !policyFileName.MatchString(p.Name) {
+			return nil, fmt.Errorf("policy file %q: the name must be a plain file name ending in .yaml or .yml", p.Name)
+		}
+		if seen[p.Name] {
+			return nil, fmt.Errorf("policy file %q: given twice", p.Name)
+		}
+		seen[p.Name] = true
+	}
+	cfg.PolicySources = policies
+	return cfg, nil
 }
 
 // readPolicyDir reads the *.yaml and *.yml files of dir, not recursively,

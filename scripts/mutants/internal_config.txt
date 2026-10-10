@@ -6,3 +6,7 @@ internal/config/snapshot.go	if _, dup := s.AdminTokens[h]; dup {	if _, dup := s.
 internal/config/snapshot.go	if len(cfg.Admin.Tokens) > 0 && cfg.Database.URLEnv == "" {	if len(cfg.Admin.Tokens) > 1 && cfg.Database.URLEnv == "" {
 internal/config/snapshot.go	s.AdminTokens[h] = &t	s.Keys[h] = &APIKey{ID: t.ID}
 internal/config/snapshot.go	!idPattern.MatchString(t.ID)	false
+internal/config/config.go	if seen[p.Name] {	if false {
+internal/config/config.go	cfg.Audit.SigningKeyFile = filepath.Join(dir, k)	cfg.Audit.SigningKeyFile = k
+internal/config/config.go	if !policyFileName.MatchString(p.Name) {	if false {
+internal/config/config.go	cfg.PolicySources = policies	cfg.PolicySources = nil

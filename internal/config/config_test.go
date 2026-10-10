@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bredda/tavian/internal/policy"
 )
 
 const validYAML = `
@@ -951,5 +953,40 @@ func TestAdminTokens(t *testing.T) {
 	// an unknown key in the section is a typo, not a weaker setting
 	if _, err := Parse([]byte("profile: air-gapped\nadmin:\n  token: []\n")); err == nil {
 		t.Error("an unknown field of admin was accepted")
+	}
+}
+
+func TestFromRevision(t *testing.T) {
+	raw := []byte("profile: air-gapped\naudit: {signing_key_file: audit.key}\n")
+	pol := []policy.Source{{Name: "10 base.yaml", Raw: []byte("a")}, {Name: "b.yml", Raw: []byte("b")}}
+	cfg, err := FromRevision(raw, pol, "/etc/tavian")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Audit.SigningKeyFile != "/etc/tavian/audit.key" {
+		t.Errorf("a relative key path is resolved from the configuration directory: %q", cfg.Audit.SigningKeyFile)
+	}
+	if len(cfg.PolicySources) != 2 {
+		t.Errorf("policies = %v", cfg.PolicySources)
+	}
+	if abs, _ := FromRevision([]byte("profile: air-gapped\naudit: {signing_key_file: /k}\n"), nil, "/etc"); abs.Audit.SigningKeyFile != "/k" {
+		t.Errorf("an absolute key path changed: %q", abs.Audit.SigningKeyFile)
+	}
+	for name, ps := range map[string][]policy.Source{
+		"directory part": {{Name: "../x.yaml"}},
+		"subdirectory":   {{Name: "sub/x.yaml"}},
+		"backslash":      {{Name: `a\x.yaml`}},
+		"hidden":         {{Name: ".x.yaml"}},
+		"extension":      {{Name: "x.txt"}},
+		"empty":          {{Name: ""}},
+		"control":        {{Name: "a\nb.yaml"}},
+		"twice":          {{Name: "a.yaml"}, {Name: "a.yaml"}},
+	} {
+		if _, err := FromRevision(raw, ps, "/etc"); err == nil {
+			t.Errorf("%s: the policy file name was accepted", name)
+		}
+	}
+	if _, err := FromRevision([]byte("profile: air-gapped\nbogus: 1\n"), nil, "/etc"); err == nil {
+		t.Error("an unknown field was accepted")
 	}
 }

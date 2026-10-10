@@ -28,16 +28,24 @@ import (
 const Prefix = "/admin/v1"
 
 // Actions that are recorded.
-const ActionReload = "config.reload"
+const (
+	ActionReload   = "config.reload"
+	ActionApply    = "config.apply"
+	ActionRollback = "config.rollback"
+)
 
 // Store is what the API needs from the database.
 type Store interface {
 	RecordAdminChange(ctx context.Context, c store.AdminChange) error
 	ListAdminChanges(ctx context.Context, limit int, before int64) ([]store.AdminChange, int64, error)
+	GetRevision(ctx context.Context, id string) (store.StoredRevision, error)
+	ListRevisions(ctx context.Context, limit int, before int64) ([]store.StoredRevision, int64, error)
+	ActiveRevision(ctx context.Context) (store.Active, bool, error)
 }
 
 // Rejection is returned by a change that was refused: the configuration is
-// invalid, or cannot be applied to a running gateway. Nothing changed.
+// invalid, cannot be applied to a running gateway, or is not based on the
+// active revision. Nothing changed.
 type Rejection struct {
 	// Code is stable and meant for programs; Message is for people and says why.
 	Code, Message string
@@ -47,26 +55,83 @@ type Rejection struct {
 
 func (r *Rejection) Error() string { return r.Code + ": " + r.Message }
 
-// Record writes the record of a change that is about to take effect. A
-// Reloader must call it exactly once, after validation and before it applies
-// anything, and give up if it fails.
-type Record func(target string, detail any) error
+// ErrAuditUnavailable is returned by a Controller that could not record a
+// change: the change was not made.
+var ErrAuditUnavailable = errors.New("the change cannot be recorded")
 
-// Reloaded says what a reload did.
-type Reloaded struct {
-	Revision string `json:"revision"`
-	Previous string `json:"previous"`
+// Actor is who asks for a change: it goes into the record of the change.
+type Actor struct {
+	ID        string // the admin token's id
+	RequestID string
+	Remote    string
 }
 
-// Reloader reads the configuration file again, as SIGHUP does.
-type Reloader func(ctx context.Context, record Record) (Reloaded, error)
+// File is a policy file of a revision.
+type File struct {
+	Name string `json:"name"`
+	YAML string `json:"yaml"`
+}
+
+// ApplyRequest is a configuration to validate or apply: what Load reads from
+// a configuration file and its policy directory. Base is the revision the
+// caller believes is active; the change is refused if it is not.
+type ApplyRequest struct {
+	Config   string `json:"config"`
+	Policies []File `json:"policies"`
+	Base     string `json:"base"`
+}
+
+// RollbackRequest asks to make an earlier revision the active one again.
+type RollbackRequest struct {
+	Revision string `json:"revision"`
+	Base     string `json:"base"`
+}
+
+// Result says what a change did.
+type Result struct {
+	Revision string `json:"revision"`
+	Previous string `json:"previous"`
+	// Unchanged is true when the new revision is the one that was active.
+	Unchanged bool     `json:"unchanged"`
+	Warnings  []string `json:"warnings"`
+}
+
+// Validation is what checking a configuration found. Valid says that it
+// compiles; Applicable that it could replace the running one (a setting that
+// needs a restart, or the removal of every admin token, makes a valid
+// configuration inapplicable, and Reason says why).
+type Validation struct {
+	Valid      bool     `json:"valid"`
+	Applicable bool     `json:"applicable"`
+	Revision   string   `json:"revision,omitempty"`
+	Errors     []string `json:"errors"`
+	Warnings   []string `json:"warnings"`
+	Reason     string   `json:"reason,omitempty"`
+}
+
+// Controller changes the running configuration. The implementation records
+// each change it makes, in the same transaction as the change of the active
+// revision, and before the new configuration takes effect; one that cannot
+// record it returns ErrAuditUnavailable and changes nothing. A refusal is a
+// *Rejection (the caller records the attempt).
+type Controller interface {
+	// Reload reads the configuration file and its policy directory again.
+	Reload(ctx context.Context, who Actor) (Result, error)
+	// Apply makes the given configuration the active one.
+	Apply(ctx context.Context, who Actor, req ApplyRequest) (Result, error)
+	// Rollback makes an earlier revision the active one again.
+	Rollback(ctx context.Context, who Actor, req RollbackRequest) (Result, error)
+	// Validate checks a configuration without applying it.
+	Validate(ctx context.Context, req ApplyRequest) Validation
+}
 
 // Deps are the dependencies of the API.
 type Deps struct {
-	Snap   *config.Holder
-	Store  Store
-	Reload Reloader
-	Log    *slog.Logger
+	Snap  *config.Holder
+	Store Store
+	// Control changes the configuration; without one the API only reads.
+	Control Controller
+	Log     *slog.Logger
 	// Observe counts calls by action and outcome, for metrics. May be nil.
 	Observe func(action, outcome string)
 	// Now is the clock; nil means time.Now.
@@ -99,7 +164,13 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("GET "+Prefix+"/whoami", a.handle("whoami", a.whoami))
 	mux.HandleFunc("GET "+Prefix+"/config", a.handle("config.show", a.configShow))
 	mux.HandleFunc("GET "+Prefix+"/changes", a.handle("changes.list", a.changes))
+	mux.HandleFunc("GET "+Prefix+"/config/revisions", a.handle("revisions.list", a.revisions))
+	mux.HandleFunc("GET "+Prefix+"/config/revisions/{id}", a.handle("revisions.show", a.revision))
+	mux.HandleFunc("GET "+Prefix+"/config/diff", a.handle("revisions.diff", a.diff))
+	mux.HandleFunc("POST "+Prefix+"/config/validate", a.handle("config.validate", a.validate))
 	mux.HandleFunc("POST "+Prefix+"/config/reload", a.handle(ActionReload, a.reload))
+	mux.HandleFunc("POST "+Prefix+"/config/apply", a.handle(ActionApply, a.apply))
+	mux.HandleFunc("POST "+Prefix+"/config/rollback", a.handle(ActionRollback, a.rollback))
 }
 
 type api struct {
@@ -169,22 +240,9 @@ func (a *api) configShow(w http.ResponseWriter, _ *http.Request, _ call) {
 }
 
 func (a *api) changes(w http.ResponseWriter, r *http.Request, _ call) {
-	limit, before := 50, int64(0)
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > 500 {
-			writeError(w, http.StatusBadRequest, "invalid_request", "limit must be between 1 and 500")
-			return
-		}
-		limit = n
-	}
-	if v := r.URL.Query().Get("before"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 1 {
-			writeError(w, http.StatusBadRequest, "invalid_request", "before must be a positive integer, as given by a previous page")
-			return
-		}
-		before = n
+	limit, before, ok := paging(w, r)
+	if !ok {
+		return
 	}
 	list, next, err := a.Store.ListAdminChanges(r.Context(), limit, before)
 	if err != nil {
@@ -202,47 +260,126 @@ func (a *api) changes(w http.ResponseWriter, r *http.Request, _ call) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (a *api) reload(w http.ResponseWriter, r *http.Request, c call) {
-	if a.Reload == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "this gateway cannot reload its configuration")
-		return
-	}
-	var recordErr error
-	record := func(target string, detail any) error {
-		recordErr = a.recordChange(r.Context(), c, ActionReload, target, store.OutcomeApplied, detail)
-		return recordErr
-	}
-	res, err := a.Reload(r.Context(), record)
+// change runs a change of the configuration and answers for it. The
+// controller records what it applies; here a refused attempt is recorded and
+// the failures are told apart.
+func (a *api) change(w http.ResponseWriter, r *http.Request, c call, action, target string, run func(Actor) (Result, error)) {
+	res, err := run(Actor{ID: c.actor, RequestID: c.requestID, Remote: c.remote})
+	var rej *Rejection
 	switch {
 	case err == nil:
-		a.observe(ActionReload, "applied")
-		a.Log.InfoContext(r.Context(), "admin change", "action", ActionReload, "actor", c.actor, "revision", res.Revision, "request_id", c.requestID)
-		writeJSON(w, http.StatusOK, res)
-	case recordErr != nil:
-		// The change was not recorded, so it was not made.
-		a.observe(ActionReload, "audit_unavailable")
-		a.Log.ErrorContext(r.Context(), "admin change refused: it cannot be recorded", "action", ActionReload, "actor", c.actor, "error", recordErr, "request_id", c.requestID)
-		writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "the change cannot be recorded, so it was not made")
-	default:
-		var rej *Rejection
-		if !errors.As(err, &rej) {
-			a.observe(ActionReload, "failed")
-			a.Log.ErrorContext(r.Context(), "admin change failed", "action", ActionReload, "actor", c.actor, "error", err, "request_id", c.requestID)
-			writeError(w, http.StatusServiceUnavailable, "unavailable", "the configuration could not be reloaded; the running revision is unchanged")
-			return
+		a.observe(action, "applied")
+		a.Log.InfoContext(r.Context(), "admin change", "action", action, "actor", c.actor, "revision", res.Revision, "request_id", c.requestID)
+		if res.Warnings == nil {
+			res.Warnings = []string{}
 		}
+		writeJSON(w, http.StatusOK, res)
+	case errors.Is(err, ErrAuditUnavailable):
+		// The change was not recorded, so it was not made.
+		a.observe(action, "audit_unavailable")
+		a.Log.ErrorContext(r.Context(), "admin change refused: it cannot be recorded", "action", action, "actor", c.actor, "error", err, "request_id", c.requestID)
+		writeError(w, http.StatusServiceUnavailable, "audit_unavailable", "the change cannot be recorded, so it was not made")
+	case errors.As(err, &rej):
 		// A refused attempt is recorded too; if that fails the refusal still
 		// stands, since nothing changed.
-		if rerr := a.recordChange(r.Context(), c, ActionReload, "", store.OutcomeRejected, map[string]string{"code": rej.Code}); rerr != nil {
+		if rerr := a.recordChange(r.Context(), c, action, target, store.OutcomeRejected, map[string]string{"code": rej.Code}); rerr != nil {
 			a.Log.ErrorContext(r.Context(), "the rejection of an admin change could not be recorded", "error", rerr, "request_id", c.requestID)
 		}
-		a.observe(ActionReload, "rejected")
+		a.observe(action, "rejected")
 		status := rej.Status
 		if status == 0 {
 			status = http.StatusUnprocessableEntity
 		}
 		writeError(w, status, rej.Code, rej.Message)
+	default:
+		a.observe(action, "failed")
+		a.Log.ErrorContext(r.Context(), "admin change failed", "action", action, "actor", c.actor, "error", err, "request_id", c.requestID)
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "the change could not be made; the running revision is unchanged")
 	}
+}
+
+// maxBody bounds what a change may send: a configuration and its policy files.
+const maxBody = 8 << 20
+
+// decode reads a JSON body strictly. It answers the error itself and says
+// whether the body was usable.
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "too_large", "the request is larger than "+strconv.Itoa(maxBody>>20)+" MiB")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid_request", "the body must be a JSON object with the documented fields: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// canChange answers 501 when no controller was given, and says so.
+func (a *api) canChange(w http.ResponseWriter) bool {
+	if a.Control == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "this gateway cannot change its configuration")
+		return false
+	}
+	return true
+}
+
+func (a *api) reload(w http.ResponseWriter, r *http.Request, c call) {
+	if !a.canChange(w) {
+		return
+	}
+	a.change(w, r, c, ActionReload, "", func(who Actor) (Result, error) { return a.Control.Reload(r.Context(), who) })
+}
+
+func (a *api) apply(w http.ResponseWriter, r *http.Request, c call) {
+	if !a.canChange(w) {
+		return
+	}
+	var req ApplyRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Base == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "base is required: the revision you believe is active (GET /admin/v1/config)")
+		return
+	}
+	a.change(w, r, c, ActionApply, "", func(who Actor) (Result, error) { return a.Control.Apply(r.Context(), who, req) })
+}
+
+func (a *api) rollback(w http.ResponseWriter, r *http.Request, c call) {
+	if !a.canChange(w) {
+		return
+	}
+	var req RollbackRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Base == "" || !revisionID.MatchString(req.Revision) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "revision (12 hexadecimal characters) and base (the revision you believe is active) are required")
+		return
+	}
+	a.change(w, r, c, ActionRollback, req.Revision, func(who Actor) (Result, error) { return a.Control.Rollback(r.Context(), who, req) })
+}
+
+func (a *api) validate(w http.ResponseWriter, r *http.Request, _ call) {
+	if !a.canChange(w) {
+		return
+	}
+	var req ApplyRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	v := a.Control.Validate(r.Context(), req)
+	if v.Errors == nil {
+		v.Errors = []string{}
+	}
+	if v.Warnings == nil {
+		v.Warnings = []string{}
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (a *api) recordChange(ctx context.Context, c call, action, target, outcome string, detail any) error {
