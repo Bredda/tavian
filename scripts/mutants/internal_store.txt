@@ -20,3 +20,12 @@ internal/store/revisions.go	limit = min(max(limit, 1), 500)	limit = min(max(limi
 internal/store/tokenuse.go	uses         = admin_token_use.uses + EXCLUDED.uses,	uses         = EXCLUDED.uses,
 internal/store/tokenuse.go	EXCLUDED.last_used_at >= admin_token_use.last_used_at THEN	EXCLUDED.last_used_at < admin_token_use.last_used_at THEN
 internal/store/tokenuse.go	last_used_at = GREATEST(	last_used_at = LEAST(
+internal/store/auditor.go	var identifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)	var identifier = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+internal/store/auditor.go	var identifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)	var identifier = regexp.MustCompile(`^[a-zA-Z_"][a-z0-9_";]{0,62}$`)
+internal/store/auditor.go	LOGIN NOSUPERUSER NOCREATEDB	LOGIN SUPERUSER NOCREATEDB
+internal/store/auditor.go	SET default_transaction_read_only = on;	SET default_transaction_read_only = off;
+internal/store/auditor.go	GRANT SELECT ON	GRANT ALL ON
+internal/store/auditor.go	"outbox", "outbox_consumers", "outbox_prunes", "schema_migrations",	"outbox", "outbox_consumers", "schema_migrations",
+internal/store/auditor.go	var ReservedTables = []string{"admin_token_use", "usage_hourly"}	var ReservedTables = []string{"usage_hourly"}
+internal/store/auditor.go	tables = append(tables, q(schema, t))	tables = append(tables, q(t))
+internal/store/auditor.go	GRANT USAGE ON SCHEMA %[3]s TO %[1]s;	GRANT ALL ON SCHEMA %[3]s TO %[1]s;

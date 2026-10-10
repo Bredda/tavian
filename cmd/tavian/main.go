@@ -44,6 +44,8 @@ Commands:
   keygen     Generate an API key (or, with -admin, an administration token) and the hash to put in the configuration
   audit-keygen  Generate the key that signs the seals of the audit chain
   verify-audit  Check the audit chain, its seals and the records it covers
+  audit-export  Write the audit chain with the records it covers, as JSON lines
+  audit-role    Print the SQL that creates the read-only database role of an auditor
   version    Print the version
 
 Run "tavian <command> -h" for command flags.
@@ -73,6 +75,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdAuditKeygen(args[1:], stdout, stderr)
 	case "verify-audit":
 		return cmdVerifyAudit(args[1:], stdout, stderr)
+	case "audit-export":
+		return cmdAuditExport(args[1:], stdout, stderr)
+	case "audit-role":
+		return cmdAuditRole(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "tavian", version.String())
 		return 0

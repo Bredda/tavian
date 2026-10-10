@@ -33,3 +33,10 @@ cmd/tavian/configcmd.go	if res.Unchanged {	if false {
 cmd/tavian/control.go	case cfg.Admin.UseFlushEvery != running.Admin.UseFlushEvery:	case false:
 cmd/tavian/control.go	logAdminTokenExpiries(c.log, snap, time.Now())	_ = snap
 cmd/tavian/configcmd.go	expires += " (expired)"	_ = expires
+cmd/tavian/audit.go	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+cmd/tavian/audit.go	f, err := os.OpenFile(*out, flags, 0o600)	f, err := os.OpenFile(*out, flags, 0o644)
+cmd/tavian/audit.go	case chain.KindDecision, chain.KindAdminChange:	case chain.KindDecision:
+cmd/tavian/audit.go	if t, err := time.Parse("2006-01-02", s); err == nil {	if t, err := time.Parse("2006-01-02", s); err != nil {
+cmd/tavian/audit.go	name := fs.String("name", "tavian_auditor", "name of the role")	name := fs.String("name", "auditor", "name of the role")
+cmd/tavian/audit.go	FromPosition: *from}	FromPosition: *from + 1}
+cmd/tavian/audit.go	fmt.Fprintf(stderr, "exported %d entries\n", n)	_ = n

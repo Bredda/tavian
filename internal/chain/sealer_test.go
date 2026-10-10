@@ -24,6 +24,7 @@ import (
 type env struct {
 	t      *testing.T
 	st     *store.Store
+	url    string
 	runner *outbox.Runner
 	sealer *Sealer
 	pub    ed25519.PublicKey
@@ -32,8 +33,8 @@ type env struct {
 
 func newEnv(t *testing.T, withKey bool) *env {
 	t.Helper()
-	st, _ := storetest.New(t)
-	e := &env{t: t, st: st}
+	st, url := storetest.New(t)
+	e := &env{t: t, st: st, url: url}
 	e.now.Store(time.Now().UnixNano())
 	e.sealer = &Sealer{SealEveryEvents: 5, SealEvery: time.Hour, Now: func() time.Time { return time.Unix(0, e.now.Load()).UTC() }}
 	if withKey {

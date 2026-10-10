@@ -1204,6 +1204,34 @@ func TestFinanceDemo(t *testing.T) {
 		}
 	})
 
+	// 5b. The auditor does the same with a database role that can only read.
+	t.Run("an auditor with a read-only database role verifies and exports", func(t *testing.T) {
+		env := []string{"TAVIAN_DATABASE_URL=" + storetest.AuditorURL(t, dbURL)}
+		out, code := g.tavianEnv(env, "verify-audit", "-config", g.cfg, "-public-key", g.publicKey, "-anchors", seals)
+		if code != 0 || !strings.Contains(out, "OK: no problem found") || !strings.Contains(out, "signatures verified") {
+			t.Fatalf("verify-audit with the read-only role: exit %d\n%s", code, out)
+		}
+		export := filepath.Join(dir, "audit.jsonl")
+		if out, code := g.tavianEnv(env, "audit-export", "-config", g.cfg, "-o", export); code != 0 || !strings.Contains(out, "exported") {
+			t.Fatalf("audit-export: exit %d\n%s", code, out)
+		}
+		b, err := os.ReadFile(export)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chained := query[int](t, pool, `SELECT count(*) FROM audit_chain`)
+		if got := strings.Count(string(b), "\n"); got != chained {
+			t.Errorf("exported %d entries, the chain has %d", got, chained)
+		}
+		if !strings.Contains(string(b), `"kind":"decision"`) || !strings.Contains(string(b), `"kind":"admin_change"`) || !strings.Contains(string(b), `"actor":"e2e-admin"`) {
+			t.Errorf("the export lacks decisions or administrators' changes")
+		}
+		// the export holds no request content either
+		if strings.Contains(strings.ToUpper(string(b)), strings.ToUpper(ibanCompact)) || strings.Contains(string(b), "3M02") {
+			t.Error("the IBAN is in the export")
+		}
+	})
+
 	// The IBAN is nowhere: not in a record, a log or a metric.
 	t.Run("the IBAN was never written down", func(t *testing.T) {
 		all := strings.ToUpper(everythingRecorded(t, pool, g))

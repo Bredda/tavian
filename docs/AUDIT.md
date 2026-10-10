@@ -54,7 +54,7 @@ tavian verify-audit -config tavian.yaml -public-key ed25519:... -export-seals se
 tavian verify-audit -config tavian.yaml -public-key ed25519:... -anchors seals.jsonl
 ```
 
-It only reads, so a read-only database role is enough. It checks that
+It only reads, so a read-only database role is enough ([For the auditor](#for-the-auditor) below). It checks that
 
 - entries are numbered without gaps, link to each other and hash to what they claim;
 - every record still in the outbox matches its hash (and time), and no decision record that the sealer has passed is missing from the chain;
@@ -64,6 +64,57 @@ It only reads, so a read-only database role is enough. It checks that
 `-from-seal N` starts after a signed seal instead of the first entry, for long chains. Records that the chain still covers but the outbox no longer holds are a problem unless `-allow-pruned` is given and a signed seal covers them *and* the retention log accounts for them (see below).
 
 The report also says how many entries come after the last seal (not covered by a signature yet) and how many records are waiting to be chained (normal for a few seconds). Decision and admin change records are chained; usage events are accounting. Retention never removes admin change records.
+
+## For the auditor
+
+An auditor needs three things, none of which lets them change anything: a database role that can only read, a configuration file that says where the database is, and the public key of the seals.
+
+**1. A role that can only read.** `tavian audit-role` prints the SQL that creates it; it runs nothing, and the script is run by a database administrator (`tavian audit-role -name tavian_auditor -database tavian | psql`), who then sets the password or the certificate of the role.
+
+```bash
+tavian audit-role -name tavian_auditor -database tavian -schema public > auditor-role.sql
+```
+
+The role can log in and has no right to create anything or to bypass anything. It gets `SELECT` on the tables the checks and the export read (`audit_chain`, `audit_seals`, `outbox`, `outbox_consumers`, `outbox_prunes`, the history of administrators' changes and of configuration revisions) and nothing else: not `usage_hourly`, not `admin_token_use`, no write, no `TRUNCATE`, no `CREATE`. Its sessions also start read-only (`default_transaction_read_only`), a second lock that the grants make unnecessary. A test creates the role from this very script and tries to write, delete, truncate, drop, alter and grant: all refused, and `verify-audit` works with it. On PostgreSQL 14 and older, also run `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (version 15 and later already do).
+
+What the auditor can read: all of the outbox, which also holds the usage events (who used which model, how many tokens, at what cost; never the content of a request). Restricting that would need the audit records in a schema of their own; it is not done.
+
+**2. A configuration file.** The auditor does not need the gateway's. This is enough (the profile decides which database addresses are accepted):
+
+```yaml
+profile: air-gapped          # the profile of the gateway
+database:
+  url_env: TAVIAN_DATABASE_URL
+```
+
+with `TAVIAN_DATABASE_URL` set to the connection URL of the auditor's role.
+
+**3. The public key** of the seals (`tavian audit-keygen` printed it) and, ideally, the seals exported earlier and kept elsewhere (`-anchors`).
+
+Then the auditor:
+
+```bash
+tavian verify-audit -config auditor.yaml -public-key ed25519:... -anchors seals.jsonl
+tavian audit-export -config auditor.yaml -o audit.jsonl                  # all entries
+tavian audit-export -config auditor.yaml -kind admin_change -since 2026-09-01 -until 2026-10-01
+```
+
+`audit-export` writes the chain as JSON lines, one entry per line, in the order of the chain, with the record it covers:
+
+```json
+{"position":412,"event_id":"…","kind":"admin_change","occurred_at":"2026-10-10T12:00:00Z",
+ "content_hash":"…","prev_hash":"…","entry_hash":"…","record":{"actor":"ops-alice","action":"config.apply",…}}
+```
+
+`kind` is `decision` or `admin_change`; `record` is the record as the outbox holds it, or `null` with `"pruned":true` when retention has removed it (the entry stays). Filters: `-kind` (comma-separated), `-since` and `-until` (RFC 3339 or a date, UTC; `-since` is included, `-until` is not), `-from-position`. `-o FILE` writes the file with mode 0600 and never over an existing one without `-force`; without it the entries go to the standard output.
+
+The export is enough to check the chain with a tool of one's own. With `‖` for concatenation and `be64` for a signed 64-bit big-endian integer:
+
+- `content_hash` = SHA-256 of the **canonical form** of `record`: the JSON with its object keys sorted, no whitespace outside strings, numbers as they are written, strings as JSON strings with no escaping of `<`, `>` and `&`;
+- `entry_hash` = SHA-256 of `"tavian-audit-entry-v1" ‖ 0x00 ‖ be64(position) ‖ prev_hash ‖ be64(length of event_id) ‖ event_id ‖ be64(occurred_at in microseconds since 1970) ‖ content_hash` (the hashes as their 32 raw bytes, not their hexadecimal text);
+- `prev_hash` of an entry is the `entry_hash` of the one before; the first one is SHA-256 of `"tavian-audit-genesis-v1"`.
+
+`tavian verify-audit` does all of this and more (the seals and their signatures, the records still in the outbox, the retention log); the export is for archiving, for reading, and for cross-checking with something else. When the export starts after the first entry (`-from-position`), the first `prev_hash` is the one of an entry you do not have: trust it, or start from the beginning.
 
 ## Retention
 
