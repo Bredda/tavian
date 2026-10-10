@@ -53,4 +53,3 @@ internal/admin/admin.go	ti.Uses += u.Uses	ti.Uses = u.Uses
 internal/admin/admin.go	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })	_ = sort.Slice
 internal/admin/admin.go	auth.AdminAuthenticator{Snap: d.Snap, Now: d.Now}	auth.AdminAuthenticator{Snap: d.Snap}
 internal/admin/admin.go	a.Uses.Touch(who.TokenID, a.now(), c.remote)	_ = who
-internal/admin/usage.go			flush(context.Background())			_ = flush

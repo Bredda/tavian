@@ -5,3 +5,14 @@ internal/chain/verify.go	slices.Contains(chained, *kind)	slices.Contains([]strin
 internal/chain/verify.go	o.kind = ANY($2::text[]) AND (o.xid	o.kind = $2 AND (o.xid
 internal/chain/verify.go	ConsumerName, chained, maxProblems)	ConsumerName, KindDecision, maxProblems)
 internal/chain/verify.go	ConsumerName, chained).Scan(&n)	ConsumerName, KindDecision).Scan(&n)
+internal/chain/export.go	WHERE c.position > $1	WHERE c.position >= $1
+internal/chain/export.go	c.occurred_at >= $3	c.occurred_at > $3
+internal/chain/export.go	c.occurred_at < $4	c.occurred_at <= $4
+internal/chain/export.go	if payload == nil {	if payload != nil {
+internal/chain/export.go	if got < pageSize {	if got <= pageSize {
+internal/chain/export.go	kinds = []string{} // a NULL array would match nothing	kinds = nil
+internal/chain/export.go	COALESCE(o.kind, $5), c.occurred_at	o.kind, c.occurred_at
+internal/chain/export.go	AND (cardinality($2::text[]) = 0 OR COALESCE(o.kind, $5) = ANY($2::text[]))	AND (cardinality($2::text[]) = 0 OR o.kind = ANY($2::text[]))
+internal/chain/export.go	after = e.Position	after = e.Position - 1 + 1 - 1
+internal/chain/export.go	e.Record, e.Pruned = json.RawMessage("null"), true	e.Record, e.Pruned = json.RawMessage("null"), false
+internal/chain/export.go	e.OccurredAt = e.OccurredAt.UTC()	_ = e

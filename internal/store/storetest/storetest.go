@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,4 +65,50 @@ func New(t *testing.T) (*store.Store, string) {
 		t.Fatal(err)
 	}
 	return st, u.String()
+}
+
+// AuditorURL creates, in the cluster of the test database, a role with the
+// read-only grants of store.AuditorRoleSQL on the schema of st's URL, and
+// returns that URL with the role's credentials. The role is dropped at the end
+// of the test. The test is skipped when the database user may not create roles.
+func AuditorURL(t *testing.T, schemaURL string) string {
+	t.Helper()
+	base := os.Getenv("TAVIAN_TEST_DATABASE_URL")
+	if base == "" {
+		t.Skip("TAVIAN_TEST_DATABASE_URL not set")
+	}
+	u, err := url.Parse(schemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, database := u.Query().Get("search_path"), strings.TrimPrefix(u.Path, "/")
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	role := "t_auditor_" + hex.EncodeToString(b[:])
+	script, err := store.AuditorRoleSQL(role, database, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	admin, err := pgxpool.New(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	if _, err := admin.Exec(ctx, script); err != nil {
+		if strings.Contains(err.Error(), "permission denied") {
+			t.Skipf("the test database user cannot create roles: %v", err)
+		}
+		t.Fatalf("creating the auditor role: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DROP OWNED BY `+role)
+		_, _ = admin.Exec(context.Background(), `DROP ROLE IF EXISTS `+role)
+	})
+	const password = "auditor-test-password"
+	if _, err := admin.Exec(ctx, `ALTER ROLE `+role+` PASSWORD '`+password+`'`); err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(role, password)
+	return u.String()
 }
