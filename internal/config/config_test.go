@@ -1018,3 +1018,67 @@ func TestRoles(t *testing.T) {
 		t.Error("HasAdmin with no admin")
 	}
 }
+
+func TestAdminTokenExpiry(t *testing.T) {
+	db := map[string]string{"DB_URL": "postgres://x"}
+	y := "database: {url_env: DB_URL}\nadmin:\n  tokens:\n" +
+		"    - {id: dated, role: admin, hash: " + hashA + ", expires_at: 2027-03-01}\n" +
+		"    - {id: precise, role: operator, hash: " + hashB + ", expires_at: \"2027-03-01T10:00:00+02:00\"}\n" +
+		"    - {id: forever, role: auditor, hash: sha256:" + strings.Repeat("c", 64) + "}\n"
+	s, err := compileAdmin(t, y, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]*AdminToken{}
+	for _, tk := range s.AdminTokens {
+		by[tk.ID] = tk
+	}
+	if want := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC); !by["dated"].ExpiresAt.Equal(want) {
+		t.Errorf("a plain date means 00:00 UTC: %v", by["dated"].ExpiresAt)
+	}
+	if want := time.Date(2027, 3, 1, 8, 0, 0, 0, time.UTC); !by["precise"].ExpiresAt.Equal(want) {
+		t.Errorf("RFC 3339 offset: %v", by["precise"].ExpiresAt)
+	}
+	if !by["forever"].ExpiresAt.IsZero() || by["forever"].Expired(time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Error("a token without expires_at expires")
+	}
+	at := by["dated"].ExpiresAt
+	if by["dated"].Expired(at.Add(-time.Nanosecond)) || !by["dated"].Expired(at) || !by["dated"].Expired(at.Add(time.Hour)) {
+		t.Error("a token is refused from its expires_at on, not before")
+	}
+	now := time.Date(2027, 2, 20, 0, 0, 0, 0, time.UTC)
+	e := s.AdminTokenExpiries(now, 14*24*time.Hour)
+	if len(e.Expired) != 0 || strings.Join(e.Soon, ",") != "dated,precise" || !e.HasNext || e.Next != at.Sub(now) {
+		t.Errorf("expiries = %+v", e)
+	}
+	e = s.AdminTokenExpiries(at.Add(time.Minute), 0)
+	if strings.Join(e.Expired, ",") != "dated" || len(e.Soon) != 0 || !e.HasNext || e.Next != by["precise"].ExpiresAt.Sub(at.Add(time.Minute)) {
+		t.Errorf("after the first: %+v", e)
+	}
+	if s.HasLiveAdmin(at.Add(time.Minute)) || !s.HasLiveAdmin(now) {
+		t.Error("HasLiveAdmin: the only admin token expires at 2027-03-01")
+	}
+}
+
+func TestAdminUseFlushEvery(t *testing.T) {
+	db := map[string]string{"DB_URL": "postgres://x"}
+	with := func(extra string) error {
+		_, err := compileAdmin(t, "database: {url_env: DB_URL}\nadmin:\n  "+extra+"tokens: [{id: a, role: admin, hash: "+hashA+"}]\n", db)
+		return err
+	}
+	if err := with(""); err != nil {
+		t.Errorf("the default: %v", err)
+	}
+	cfg, _ := Parse([]byte("profile: air-gapped\n"))
+	if cfg.Admin.UseFlushEvery != 30*time.Second {
+		t.Errorf("default = %v", cfg.Admin.UseFlushEvery)
+	}
+	if err := with("use_flush_every: 5s\n  "); err != nil {
+		t.Errorf("5s: %v", err)
+	}
+	for _, bad := range []string{"500ms", "2h", "-1s"} {
+		if err := with("use_flush_every: " + bad + "\n  "); err == nil || !strings.Contains(err.Error(), "use_flush_every") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}

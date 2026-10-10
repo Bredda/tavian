@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bredda/tavian/internal/admin"
 	"github.com/bredda/tavian/internal/auth"
@@ -306,6 +308,53 @@ func TestApplyKeepsAnAdminToken(t *testing.T) {
 	}
 	if v := e.ctl.Validate(bg, admin.ApplyRequest{Config: onlyAuditors}); v.Valid {
 		t.Errorf("validate accepts a configuration nobody could change: %+v", v)
+	}
+}
+
+func TestApplyNeedsAnAdminTokenThatHasNotExpired(t *testing.T) {
+	e := newCtlEnv(t)
+	base := e.holder.Load().Revision
+	expired := strings.Replace(e.configYAML(""), "{id: ops, role: admin,", "{id: ops, role: admin, expires_at: 2000-01-01,", 1)
+	// the only admin token is past its expires_at: nobody could change the configuration
+	_, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: expired, Base: base})
+	if rej := e.rejection(err); rej.Code != "no_admin_token" || !strings.Contains(rej.Message, "not expired") {
+		t.Errorf("only an expired admin: %+v", rej)
+	}
+	if v := e.ctl.Validate(bg, admin.ApplyRequest{Config: expired}); !v.Valid || v.Applicable || !strings.HasPrefix(v.Reason, "no_admin_token") {
+		t.Errorf("validate: %+v", v)
+	}
+	// with another admin that is still good, it goes through
+	two := strings.Replace(e.configYAML("", "ops", "second"), "{id: ops, role: admin,", "{id: ops, role: admin, expires_at: 2000-01-01,", 1)
+	if _, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: two, Base: base}); err != nil {
+		t.Errorf("an expired admin next to a good one: %v", err)
+	}
+	// a token that expires later is fine
+	future := strings.Replace(e.configYAML(""), "{id: ops, role: admin,", "{id: ops, role: admin, expires_at: 2999-01-01,", 1)
+	if _, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: future, Base: e.holder.Load().Revision}); err != nil {
+		t.Errorf("a token that expires in 2999: %v", err)
+	}
+}
+
+func TestAChangeNamesTheTokensThatAreAboutToExpire(t *testing.T) {
+	e := newCtlEnv(t)
+	var logs bytes.Buffer
+	e.ctl.log = slog.New(slog.NewTextHandler(&logs, nil))
+	soon := time.Now().UTC().Add(3 * 24 * time.Hour).Format(time.RFC3339)
+	cfg := strings.Replace(e.configYAML("", "ops", "second"), "{id: second, role: admin,", "{id: second, role: admin, expires_at: \""+soon+"\",", 1)
+	if _, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: cfg, Base: e.holder.Load().Revision}); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "admin tokens expire within 14 days") || !strings.Contains(out, "second") || strings.Contains(out, "sha256") {
+		t.Errorf("log:\n%s", out)
+	}
+}
+
+func TestChangingTheFlushIntervalNeedsARestart(t *testing.T) {
+	e := newCtlEnv(t)
+	_, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: strings.Replace(e.configYAML(""), "admin:\n", "admin:\n  use_flush_every: 5s\n", 1), Base: e.holder.Load().Revision})
+	if rej := e.rejection(err); rej.Code != "restart_required" || !strings.Contains(rej.Message, "use_flush_every") {
+		t.Errorf("%+v", rej)
 	}
 }
 

@@ -82,14 +82,14 @@ func (c *controller) build(cfg *config.Config, raw []byte) (*candidate, error) {
 	if err != nil {
 		return nil, reject("invalid_configuration", "%s", err)
 	}
-	if !snap.HasAdmin() {
+	if !snap.HasLiveAdmin(c.clock()) {
 		return nil, noAdminToken()
 	}
 	return &candidate{raw: raw, snap: snap}, nil
 }
 
 func noAdminToken() *admin.Rejection {
-	return reject("no_admin_token", "the configuration lists no admin token with the role admin: nobody could change the configuration through the administration API afterwards")
+	return reject("no_admin_token", "the configuration has no admin token with the role admin that has not expired: nobody could change the configuration through the administration API afterwards")
 }
 
 // fromBytes reads a configuration given as bytes, the way Load reads a file.
@@ -157,6 +157,7 @@ func (c *controller) activate(ctx context.Context, who admin.Actor, action strin
 	}
 	c.holder.Store(snap)
 	logKeyExpiries(c.log, snap, time.Now())
+	logAdminTokenExpiries(c.log, snap, time.Now())
 	logInspection(c.log, snap)
 	logPolicies(c.log, snap)
 	c.log.Info("configuration changed", "action", action, "actor", who.ID, "revision", snap.Revision, "previous", previous,
@@ -293,7 +294,7 @@ func (c *controller) Validate(_ context.Context, req admin.ApplyRequest) admin.V
 	switch err := restartRequired(c.running, cfg); {
 	case err != nil:
 		v.Applicable, v.Reason = false, "restart_required: "+err.Error()
-	case !snap.HasAdmin():
+	case !snap.HasLiveAdmin(c.clock()):
 		v.Applicable, v.Reason = false, "no_admin_token: "+noAdminToken().Message
 	}
 	return v
@@ -343,6 +344,8 @@ func restartRequired(running, cfg *config.Config) error {
 		return errors.New("database settings changed: restart required")
 	case cfg.Audit != running.Audit || cfg.Workers != running.Workers || !reflect.DeepEqual(cfg.Outbox, running.Outbox):
 		return errors.New("audit, workers or outbox settings changed: restart required")
+	case cfg.Admin.UseFlushEvery != running.Admin.UseFlushEvery:
+		return errors.New("admin.use_flush_every changed: restart required")
 	case !sameOIDCConnection(cfg.OIDC, running.OIDC):
 		return errors.New("oidc settings other than mappings changed: restart required")
 	}

@@ -259,6 +259,41 @@ func (m *Metrics) WatchAPIKeys(snap *config.Holder, now func() time.Time) {
 	m.reg.MustRegister(&keyExpiryCollector{snap: snap, now: now})
 }
 
+// WatchAdminTokens exposes the expiry of the administration tokens, like
+// WatchAPIKeys does for API keys. Token ids are not labels.
+func (m *Metrics) WatchAdminTokens(snap *config.Holder, now func() time.Time) {
+	m.reg.MustRegister(&adminTokenExpiryCollector{snap: snap, now: now})
+}
+
+var (
+	descAdminNext = prometheus.NewDesc("tavian_admin_tokens_next_expiry_seconds",
+		"Seconds until the nearest expiry among admin tokens that have not expired yet; absent if no token expires.", nil, nil)
+	descAdminExpired = prometheus.NewDesc("tavian_admin_tokens_expired",
+		"Configured admin tokens past their expires_at (refused with 401).", nil, nil)
+)
+
+type adminTokenExpiryCollector struct {
+	snap *config.Holder
+	now  func() time.Time
+}
+
+func (c *adminTokenExpiryCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- descAdminNext
+	ch <- descAdminExpired
+}
+
+func (c *adminTokenExpiryCollector) Collect(ch chan<- prometheus.Metric) {
+	s := c.snap.Load()
+	if s == nil || len(s.AdminTokens) == 0 {
+		return
+	}
+	e := s.AdminTokenExpiries(c.now(), 0)
+	ch <- prometheus.MustNewConstMetric(descAdminExpired, prometheus.GaugeValue, float64(len(e.Expired)))
+	if e.HasNext {
+		ch <- prometheus.MustNewConstMetric(descAdminNext, prometheus.GaugeValue, e.Next.Seconds())
+	}
+}
+
 var (
 	descKeyNext = prometheus.NewDesc("tavian_api_keys_next_expiry_seconds",
 		"Seconds until the nearest expiry among API keys that have not expired yet; absent if no key expires.", nil, nil)

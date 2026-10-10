@@ -17,3 +17,6 @@ internal/store/revisions.go	if a.Base == "" {	if false {
 internal/store/revisions.go	revs, next = revs[:limit], revs[limit-1].Seq	revs, next = revs[:limit], revs[limit].Seq
 internal/store/revisions.go	ON CONFLICT DO NOTHING`, r.ID, a.Change.OccurredAt	ON CONFLICT DO NOTHING`, r.ID, a.Change.OccurredAt.Add(time.Hour)
 internal/store/revisions.go	limit = min(max(limit, 1), 500)	limit = min(max(limit, 1), 5)
+internal/store/tokenuse.go	uses         = admin_token_use.uses + EXCLUDED.uses,	uses         = EXCLUDED.uses,
+internal/store/tokenuse.go	EXCLUDED.last_used_at >= admin_token_use.last_used_at THEN	EXCLUDED.last_used_at < admin_token_use.last_used_at THEN
+internal/store/tokenuse.go	last_used_at = GREATEST(	last_used_at = LEAST(

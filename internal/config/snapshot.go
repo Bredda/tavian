@@ -354,6 +354,9 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		}
 		s.AdminTokens[h] = &t
 	}
+	if f := cfg.Admin.UseFlushEvery; f < time.Second || f > time.Hour {
+		addf("admin.use_flush_every: must be between 1s and 1h (got %s)", f)
+	}
 	if len(cfg.Admin.Tokens) > 0 && !s.HasAdmin() && len(errs) == adminErrs {
 		addf("admin.tokens: at least one token needs the role admin, or nobody could change the configuration")
 	}
@@ -377,12 +380,13 @@ func (s *Snapshot) HasAdmin() bool {
 	return false
 }
 
-// KeyExpiry summarises which API keys have expired or are about to.
+// KeyExpiry summarises which API keys, or admin tokens, have expired or are
+// about to.
 type KeyExpiry struct {
-	// Expired and Soon hold key ids, sorted.
+	// Expired and Soon hold ids, sorted.
 	Expired, Soon []string
-	// Next is the time until the nearest expiry among keys not yet expired;
-	// HasNext is false when no such key exists.
+	// Next is the time until the nearest expiry among those not yet expired;
+	// HasNext is false when none exists.
 	Next    time.Duration
 	HasNext bool
 }
@@ -390,18 +394,51 @@ type KeyExpiry struct {
 // KeyExpiries reports expired keys, keys expiring within soonWithin, and the
 // nearest upcoming expiry, as of now.
 func (s *Snapshot) KeyExpiries(now time.Time, soonWithin time.Duration) KeyExpiry {
-	var out KeyExpiry
+	var e []expiring
 	for _, k := range s.Keys {
-		if k.ExpiresAt.IsZero() {
+		e = append(e, expiring{k.ID, k.ExpiresAt})
+	}
+	return summarise(e, now, soonWithin)
+}
+
+// AdminTokenExpiries is KeyExpiries for the tokens of the administration API.
+func (s *Snapshot) AdminTokenExpiries(now time.Time, soonWithin time.Duration) KeyExpiry {
+	var e []expiring
+	for _, t := range s.AdminTokens {
+		e = append(e, expiring{t.ID, t.ExpiresAt})
+	}
+	return summarise(e, now, soonWithin)
+}
+
+// HasLiveAdmin says whether a token with the role admin is configured that has
+// not expired at now.
+func (s *Snapshot) HasLiveAdmin(now time.Time) bool {
+	for _, t := range s.AdminTokens {
+		if t.Role == RoleAdmin && !t.Expired(now) {
+			return true
+		}
+	}
+	return false
+}
+
+type expiring struct {
+	id string
+	at time.Time
+}
+
+func summarise(items []expiring, now time.Time, soonWithin time.Duration) KeyExpiry {
+	var out KeyExpiry
+	for _, it := range items {
+		if it.at.IsZero() {
 			continue
 		}
-		left := k.ExpiresAt.Sub(now)
+		left := it.at.Sub(now)
 		if left <= 0 {
-			out.Expired = append(out.Expired, k.ID)
+			out.Expired = append(out.Expired, it.id)
 			continue
 		}
 		if left <= soonWithin {
-			out.Soon = append(out.Soon, k.ID)
+			out.Soon = append(out.Soon, it.id)
 		}
 		if !out.HasNext || left < out.Next {
 			out.Next, out.HasNext = left, true

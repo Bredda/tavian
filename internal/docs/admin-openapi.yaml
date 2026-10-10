@@ -88,6 +88,34 @@ paths:
                   method: { type: string, enum: [admin_token] }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /admin/v1/tokens:
+    get:
+      tags: [Identity]
+      operationId: listTokens
+      x-required-role: auditor
+      summary: The admin tokens, their expiry and their last use
+      description: |
+        Every token of the configuration, by id, with its role, when it expires
+        and when and from where it was last used. Never the token or its hash.
+        The use is counted in memory and written to the database every
+        `admin.use_flush_every` (30 s by default), never once per request; what
+        is listed includes what has not been written yet. A token that was
+        removed from the configuration is not listed.
+      responses:
+        "200":
+          description: The tokens.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tokens]
+                properties:
+                  tokens:
+                    type: array
+                    items: { $ref: "#/components/schemas/Token" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /admin/v1/config:
     get:
       tags: [Configuration]
@@ -436,6 +464,17 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    Token:
+      type: object
+      required: [id, role, expired, uses]
+      properties:
+        id: { type: string, examples: [ops-alice] }
+        role: { type: string, enum: [admin, operator, auditor] }
+        expires_at: { type: string, format: date-time, description: Absent when the token does not expire. }
+        expired: { type: boolean, description: The token is refused from `expires_at` on. }
+        last_used_at: { type: string, format: date-time, description: Absent when the token was never used. }
+        last_remote: { type: string, description: The address of the last use. }
+        uses: { type: integer, format: int64, description: How many calls the token has made, refused ones for lack of a role included. }
     Configuration:
       type: object
       required: [config]

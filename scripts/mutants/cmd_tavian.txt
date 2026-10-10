@@ -30,5 +30,6 @@ cmd/tavian/configcmd.go	if page.Next == "" {	if true {
 cmd/tavian/configcmd.go	revisions?limit=" + strconv.Itoa(min(limit-len(all), 500))	revisions?limit=" + strconv.Itoa(limit)
 cmd/tavian/configcmd.go	if limit < 1 || limit > 500 {	if limit < 1 || limit > 5000 {
 cmd/tavian/configcmd.go	if res.Unchanged {	if false {
-cmd/tavian/control.go	if !snap.HasAdmin() {	if false {
-cmd/tavian/control.go	case !snap.HasAdmin():	case false:
+cmd/tavian/control.go	case cfg.Admin.UseFlushEvery != running.Admin.UseFlushEvery:	case false:
+cmd/tavian/control.go	logAdminTokenExpiries(c.log, snap, time.Now())	_ = snap
+cmd/tavian/configcmd.go	expires += " (expired)"	_ = expires

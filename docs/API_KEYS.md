@@ -26,7 +26,8 @@ api_keys:
 ## Expiry
 
 `expires_at` is an RFC 3339 timestamp (`2027-03-01T10:00:00+01:00`) or a plain
-date, which means 00:00 UTC. The key stops working **at** that instant and is
+date, which means 00:00 UTC (a plain date is written without quotes: in quotes
+it must be a full timestamp). The key stops working **at** that instant and is
 refused with the usual `401`; the log line says the key has expired and names
 its `id`. Without `expires_at` a key never expires.
 

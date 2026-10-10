@@ -25,6 +25,8 @@ admin:
     - id: audit-bob
       role: auditor
       hash: sha256:9c01...
+      expires_at: 2027-03-01 # optional: refused from that instant, see "The life of a token"
+  use_flush_every: 30s       # optional: how often the last use of the tokens is written (restart to change)
 ```
 
 Each entry is `id`, `role` and `hash`. At least one token must have the role admin. Reload (`SIGHUP`, or `POST /admin/v1/config/reload` with another token). The API also needs the database (`database.url_env`): a change that cannot be recorded must not be made, so the configuration is refused without it.
@@ -33,13 +35,23 @@ Tokens are 256-bit random values and, like API keys, only their SHA-256 is store
 
 Failed authentications are logged (reason, request id and address, never the credential) and counted in `tavian_admin_requests_total{outcome="unauthenticated"}`. They are not throttled.
 
+## The life of a token
+
+**Expiry.** `expires_at` is an RFC 3339 timestamp (`2027-03-01T10:00:00+01:00`) or a plain date, which means 00:00 UTC (written without quotes; in quotes it must be a full timestamp). The token stops working **at** that instant: it is refused with the usual `401`, the same answer as for an unknown token, so the caller learns nothing; the log says `admin token <id> expired` (never the token). Without `expires_at` a token never expires. As for API keys, the gateway does not refuse to start with an expired token in the file: it names the expired ones and those that expire within 14 days in the log at start and at every change, and counts them: `tavian_admin_tokens_expired` and `tavian_admin_tokens_next_expiry_seconds` (alert on the latter). One thing is refused: an `apply` or `rollback` that would leave no admin token that has not expired (`no_admin_token`), so that an expiry cannot lock everybody out of changing the configuration. If it happens anyway, edit the configuration file and restart: the file wins when it has changed ([Revisions](#revisions)).
+
+**Rotation** is an overlap, with no restart: generate a new token (`tavian keygen -admin`), add it with a new id next to the old one (`tavian config apply`, or edit the file and `reload`), give it to its holder, and when `tavian config tokens` shows that the old one is no longer used, remove it.
+
+**Revocation:** remove the entry and apply or reload. The token is refused from the next call on, since the configuration is read from memory. To cut a token off at once while the configuration cannot be changed as you like, give it an `expires_at` in the past.
+
+**Last use.** `GET /admin/v1/tokens` (`tavian config tokens`) lists every token of the configuration with its role, its expiry, when it was last used, from which address, and how many calls it made. The hash is never shown. Calls are counted in memory, and what has changed is written to the database in one statement every `admin.use_flush_every` (30 seconds by default) and once more at a clean shutdown: nothing is written per request. A listing includes what has not been written yet; after a crash, up to one interval of use is lost. A token that left the configuration is no longer listed, its row stays in the database. A call refused for lack of a role counts as a use: the token was presented and accepted.
+
 ## Roles
 
 Each token has a role, which says what it may do ([ADR-0016](adr/0016-admin-roles.md)):
 
 | Role | May |
 |---|---|
-| `auditor` | read: who you are, the running configuration, the revisions and what differs between them, the history of changes. Changes nothing |
+| `auditor` | read: who you are, the running configuration, the revisions and what differs between them, the history of changes, the admin tokens and their use. Changes nothing |
 | `operator` | what an auditor may, and check a configuration (`validate`) and make the gateway read its configuration file again (`reload`) |
 | `admin` | everything, applying and rolling back configurations included |
 
@@ -53,6 +65,7 @@ Send `Authorization: Bearer tavadm_...`. The role of the token decides what is a
 |---|---|---|
 | `GET /admin/v1/whoami` | The id and the role of the token you used | auditor |
 | `GET /admin/v1/config` | The running revision: its id, profile, and how many models, backends, keys, tokens and policy files it holds, and the warnings. No secret and no file content | auditor |
+| `GET /admin/v1/tokens` | The admin tokens: role, expiry, last use and number of calls. Never the token or its hash | auditor |
 | `GET /admin/v1/config/revisions` | The revisions the gateway has run, newest first, with the active one marked | auditor |
 | `GET /admin/v1/config/revisions/{id}` | One revision with its configuration YAML and policy files (`active` stands for the active one) | auditor |
 | `GET /admin/v1/config/diff?from=&to=` | A unified diff per file between two revisions (`to` defaults to the active one) | auditor |
@@ -98,6 +111,7 @@ tavian config apply -config conf/tavian.yaml -policies conf/policies
 tavian config rollback -revision 4b7e1c0a9d32
 tavian config reload                            # read the gateway's own file again
 tavian config history                           # who changed what
+tavian config tokens                            # the admin tokens: role, expiry, last use
 ```
 
 `apply` asks the gateway which revision is active and sends it as `base`, so a change made by someone else in between is refused, not overwritten; `-base` pins it. Without `-policies` the policy files are those of `policy.dir` of the configuration file, read relative to it, as the gateway reads them. `validate` and `apply -dry-run` exit with 1 when the configuration is invalid or cannot be applied; a refusal of `apply` or `rollback` prints its code and reason and exits with 1. An exported revision applied as it is changes nothing: the revision is a hash of the bytes. `export` does not write into a directory that has files in it without `-force`, and never writes a policy file whose name could leave the directory.
