@@ -37,19 +37,44 @@ Send `Authorization: Bearer tavadm_...`. Errors are `{"error": {"code": "...", "
 |---|---|
 | `GET /admin/v1/whoami` | The id of the token you used |
 | `GET /admin/v1/config` | The running revision: its id, profile, and how many models, backends, keys, tokens and policy files it holds, and the warnings. No secret and no file content |
-| `POST /admin/v1/config/reload` | Reads the configuration file and the policy directory again, as `SIGHUP` does. Invalid, or needing a restart (profile, database, audit, workers, outbox, OIDC connection settings): `422 invalid_configuration` or `409 restart_required`, and the running revision stays |
+| `GET /admin/v1/config/revisions` | The revisions the gateway has run, newest first, with the active one marked |
+| `GET /admin/v1/config/revisions/{id}` | One revision with its configuration YAML and policy files (`active` stands for the active one) |
+| `GET /admin/v1/config/diff?from=&to=` | A unified diff per file between two revisions (`to` defaults to the active one) |
+| `POST /admin/v1/config/validate` | Checks a configuration (`{config, policies}`) like `tavian validate` does, and says whether it could replace the running one. Changes and records nothing |
+| `POST /admin/v1/config/apply` | Makes a configuration (`{config, policies, base}`) the active one |
+| `POST /admin/v1/config/rollback` | Makes an earlier revision (`{revision, base}`) the active one again |
+| `POST /admin/v1/config/reload` | Reads the configuration file and the policy directory again, as `SIGHUP` does |
 | `GET /admin/v1/changes` | What the administrators changed, newest first, `limit` and `before` to page |
+
+## Revisions
+
+A **revision** is a configuration as the gateway ran it: the YAML and the policy files, identified by a 12-character hash of both. Each one is kept, and every usage event and decision record names the revision it was made under. One revision is **active**: the database says which.
+
+`apply` takes a `config` and its `policies` (the files `policy.dir` points to; the directory itself is not read) and a `base`, the revision you believe is active. The change is made only if the database still says so, otherwise the call answers `409 conflict` and nothing happens: two administrators cannot overwrite each other, and a change made from a stale view is refused. The same holds for `rollback`.
+
+What a change is refused for, with nothing changed and the attempt recorded:
+
+- the configuration does not compile (`422 invalid_configuration`, with what is wrong);
+- it changes a setting that cannot change while the gateway runs (`409 restart_required`): the profile, `database`, `audit`, `workers`, `outbox` and the OIDC connection (its mappings can change). Edit the configuration file and restart for those;
+- it lists no admin token (`422 no_admin_token`): nobody could use the API afterwards;
+- `rollback` only: the revision holds an API key or admin token that the running configuration does not (`409 credentials_would_return`). It may have been revoked since, and a rollback must not bring it back. Apply a configuration that lists exactly the credentials you want instead.
+
+**At start** the gateway follows the configuration file if it changed since the last start (the operator edited it, which is also how to get in again after losing every token), and otherwise the active revision, so that what the API applied survives a restart. Either way the choice is recorded (`config.bootstrap`, actor `startup`). If the active revision cannot run with the file the gateway started with, it refuses to start and says why.
+
+`SIGHUP` and `POST /config/reload` read the file again and make the result the active revision.
+
+**Limits.** With several gateways on one database, a change is made on the gateway that received it; the others pick the active revision up when they restart. Making them follow is planned. The file on disk is not rewritten by the API: after an `apply`, the file and the active revision differ until the file is edited or `reload` reads it again.
 
 ## Every change is recorded first
 
-A call that changes something (today: a reload, by the API or by `SIGHUP`, which is recorded as actor `sighup`) is recorded **before** it takes effect, in one transaction:
+A call that changes something (`apply`, `rollback`, `reload`, and the choice made at start) is recorded **before** it takes effect, in one transaction:
 
 - a row of `admin_changes`: when, who (the token id), which action, which revision it leads to, the outcome (`applied`, or `rejected` for an attempt that was refused), the request id and the caller's address, and a few facts (`previous` revision);
 - an `admin_change` event in the outbox, with the same content, which the audit chain takes in like a decision record ([AUDIT.md](AUDIT.md)).
 
 If the record cannot be written the call answers `503 audit_unavailable` and nothing changes. A refused attempt is recorded too, so that an administrator probing the limits leaves a trace. Reading calls are not recorded.
 
-The record never holds a secret, a token, or any request content. The chain makes the history tamper-evident: `tavian verify-audit` finds an edited or removed record, and with anchored seals even a rewritten chain. The retention pruner never removes these events.
+`SIGHUP` is recorded as actor `sighup`. The record never holds a secret, a token, or any request content. The chain makes the history tamper-evident: `tavian verify-audit` finds an edited or removed record, and with anchored seals even a rewritten chain. The retention pruner never removes these events.
 
 ## Metrics
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // KindAdminChange is the outbox kind of an AdminChange. The audit chain covers
@@ -36,6 +38,22 @@ type AdminChange struct {
 // transaction: either both are there or neither is. Recording the same event
 // twice is a no-op.
 func (s *Store) RecordAdminChange(ctx context.Context, c AdminChange) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("record admin change: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := recordAdminChange(ctx, tx, c); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("record admin change: %w", err)
+	}
+	return nil
+}
+
+// recordAdminChange writes the row and the outbox event within tx.
+func recordAdminChange(ctx context.Context, tx pgx.Tx, c AdminChange) error {
 	payload, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("encode admin change: %w", err)
@@ -44,11 +62,6 @@ func (s *Store) RecordAdminChange(ctx context.Context, c AdminChange) error {
 	if len(detail) == 0 {
 		detail = json.RawMessage("{}")
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("record admin change: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `
 INSERT INTO admin_changes (event_id, occurred_at, actor, action, target, outcome, request_id, remote_addr, detail)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb) ON CONFLICT (event_id) DO NOTHING`,
@@ -58,9 +71,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb) ON CONFLICT (event_id) DO NOT
 	if _, err := tx.Exec(ctx, `
 INSERT INTO outbox (event_id, kind, occurred_at, payload) VALUES ($1, $2, $3, $4) ON CONFLICT (event_id) DO NOTHING`,
 		c.EventID, KindAdminChange, c.OccurredAt, payload); err != nil {
-		return fmt.Errorf("record admin change: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("record admin change: %w", err)
 	}
 	return nil

@@ -9,3 +9,11 @@ internal/store/admin.go	defer func() { _ = tx.Rollback(ctx) }()	defer func() {}(
 internal/store/admin.go	detail = json.RawMessage("{}")	detail = json.RawMessage("[]")
 internal/store/admin.go	c.EventID, KindAdminChange, c.OccurredAt, payload)	c.EventID, "usage", c.OccurredAt, payload)
 internal/store/admin.go	c.EventID, c.OccurredAt, c.Actor, c.Action, c.Target, c.Outcome, c.RequestID, c.RemoteAddr, string(detail))	c.EventID, c.OccurredAt, c.Actor, c.Action, c.Target, c.Outcome, c.RemoteAddr, c.RequestID, string(detail))
+internal/store/revisions.go	WHERE revision = $5`	WHERE revision <> $5`
+internal/store/revisions.go	if moved != 1 {	if moved > 1 {
+internal/store/revisions.go	file_revision = CASE WHEN $4 = '' THEN file_revision ELSE $4 END	file_revision = $4
+internal/store/revisions.go	FROM config_revisions WHERE seq < $1 ORDER BY seq DESC LIMIT $2`	FROM config_revisions WHERE seq < $1 ORDER BY seq ASC LIMIT $2`
+internal/store/revisions.go	if a.Base == "" {	if false {
+internal/store/revisions.go	revs, next = revs[:limit], revs[limit-1].Seq	revs, next = revs[:limit], revs[limit].Seq
+internal/store/revisions.go	ON CONFLICT DO NOTHING`, r.ID, a.Change.OccurredAt	ON CONFLICT DO NOTHING`, r.ID, a.Change.OccurredAt.Add(time.Hour)
+internal/store/revisions.go	limit = min(max(limit, 1), 500)	limit = min(max(limit, 1), 5)

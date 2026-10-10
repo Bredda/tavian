@@ -326,6 +326,29 @@ func (g *gateway) chat(key, model, content string) reply {
 	return r
 }
 
+// adminCall calls the administration API with a JSON body (or none).
+func (g *gateway) adminCall(method, path, token, body string) (int, string) {
+	g.t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, "http://"+g.admin+path, rd)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
 func (g *gateway) tavian(args ...string) (string, int) {
 	g.t.Helper()
 	cmd := exec.Command(g.bin, args...)
@@ -573,19 +596,7 @@ func TestFinanceDemo(t *testing.T) {
 	//     signal. Each change is recorded with its author before it takes
 	//     effect, and ends up in the audit chain.
 	t.Run("the administrators' changes are recorded and chained", func(t *testing.T) {
-		adminCall := func(method, path, token string) (int, string) {
-			req, _ := http.NewRequest(method, "http://"+g.admin+path, nil)
-			if token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-			b, _ := io.ReadAll(resp.Body)
-			return resp.StatusCode, string(b)
-		}
+		adminCall := func(method, path, token string) (int, string) { return g.adminCall(method, path, token, "") }
 		rewrite := func(mutate func(cfg map[string]any)) {
 			raw, err := os.ReadFile(g.cfg)
 			if err != nil {
@@ -671,7 +682,8 @@ func TestFinanceDemo(t *testing.T) {
 			if err := json.Unmarshal([]byte(body), &page); err != nil || code != 200 {
 				t.Fatalf("GET /admin/v1/changes: %d %s", code, body)
 			}
-			if changes = page.Changes; len(changes) >= 3 {
+			// the first start (bootstrap), the API reload, the refusal and the signal
+			if changes = page.Changes; len(changes) >= 4 {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -704,6 +716,142 @@ func TestFinanceDemo(t *testing.T) {
 				t.Fatalf("%d of the %d admin changes are in the chain", n, len(ids))
 			}
 			time.Sleep(200 * time.Millisecond)
+		}
+	})
+
+	// 4c. Revisions: listed, compared, validated, applied from a base,
+	//     rolled back; and what a restart follows.
+	t.Run("configuration revisions are managed through the API", func(t *testing.T) {
+		type rev struct {
+			Revision string `json:"revision"`
+			Active   bool   `json:"active"`
+		}
+		call := func(method, path, body string) (int, string) { return g.adminCall(method, path, adminToken, body) }
+		active := func() string {
+			code, body := call("GET", "/admin/v1/config/revisions/active", "")
+			var r rev
+			if err := json.Unmarshal([]byte(body), &r); err != nil || code != 200 || !r.Active {
+				t.Fatalf("active revision: %d %s", code, body)
+			}
+			return r.Revision
+		}
+		apply := func(config, base string) (int, string, string) {
+			payload, _ := json.Marshal(map[string]any{"config": config, "base": base})
+			code, body := call("POST", "/admin/v1/config/apply", string(payload))
+			var r struct{ Revision string }
+			_ = json.Unmarshal([]byte(body), &r)
+			return code, body, r.Revision
+		}
+		fileYAML := func() string {
+			b, err := os.ReadFile(g.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(b)
+		}
+		withLevel := func(level string) string {
+			var cfg map[string]any
+			if err := yaml.Unmarshal([]byte(fileYAML()), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			cfg["log"] = map[string]any{"level": level}
+			out, _ := yaml.Marshal(cfg)
+			return string(out)
+		}
+
+		otherProfile := func() string {
+			var cfg map[string]any
+			if err := yaml.Unmarshal([]byte(fileYAML()), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			cfg["profile"] = "open-egress"
+			out, _ := yaml.Marshal(cfg)
+			return string(out)
+		}
+		a := active()
+		code, body := call("GET", "/admin/v1/config/revisions", "")
+		var list struct {
+			Revisions []rev
+			Active    string
+		}
+		if err := json.Unmarshal([]byte(body), &list); err != nil || code != 200 || len(list.Revisions) < 2 || list.Active != a || !list.Revisions[0].Active {
+			t.Fatalf("list: %d %s", code, body)
+		}
+		first := list.Revisions[len(list.Revisions)-1].Revision // the revision of the first start
+
+		// compared: the first revision and the active one differ by the log level
+		code, body = call("GET", "/admin/v1/config/diff?from="+first, "")
+		if code != 200 || !strings.Contains(body, `"status":"modified"`) || !strings.Contains(body, "level: debug") {
+			t.Errorf("diff = %d %s", code, body)
+		}
+
+		// validated: nothing changes
+		payload, _ := json.Marshal(map[string]any{"config": withLevel("warn")})
+		if code, body = call("POST", "/admin/v1/config/validate", string(payload)); code != 200 || !strings.Contains(body, `"valid":true`) || !strings.Contains(body, `"applicable":true`) || active() != a {
+			t.Errorf("validate = %d %s", code, body)
+		}
+		bad, _ := json.Marshal(map[string]any{"config": "profile: air-gapped\nmodels: nope\n"})
+		if code, body = call("POST", "/admin/v1/config/validate", string(bad)); code != 200 || !strings.Contains(body, `"valid":false`) {
+			t.Errorf("validate of a bad configuration = %d %s", code, body)
+		}
+
+		// applied from the active revision
+		code, body, c := apply(withLevel("warn"), a)
+		if code != 200 || c == "" || c == a || active() != c {
+			t.Fatalf("apply = %d %s", code, body)
+		}
+		// a second administrator who still believes in a is refused
+		if code, body, _ = apply(withLevel("error"), a); code != 409 || !strings.Contains(body, `"conflict"`) || active() != c {
+			t.Errorf("stale apply = %d %s", code, body)
+		}
+		// one that no gateway can run is refused, and so is one without admin tokens
+		if code, body, _ = apply(otherProfile(), c); code != 409 || !strings.Contains(body, "restart_required") {
+			t.Errorf("a profile change = %d %s", code, body)
+		}
+		if code, body, _ = apply("profile: air-gapped\n", c); code != 409 && code != 422 || active() != c {
+			t.Errorf("a configuration without admin tokens = %d %s", code, body)
+		}
+
+		// rolled back to the first revision (its credentials are all still there)
+		payload, _ = json.Marshal(map[string]string{"revision": first, "base": c})
+		if code, body = call("POST", "/admin/v1/config/rollback", string(payload)); code != 200 || active() != first {
+			t.Fatalf("rollback = %d %s", code, body)
+		}
+
+		// A restart follows the database while the file is as it was last time...
+		_, _, d := apply(withLevel("error"), first)
+		if d == "" {
+			t.Fatal("apply before the restart failed")
+		}
+		if err := g.stop(); err != nil {
+			t.Fatalf("stop: %v", err)
+		}
+		g.start()
+		if got := active(); got != d {
+			t.Errorf("after a restart with an unchanged file the gateway runs %s, want the applied %s", got, d)
+		}
+		if code, body := call("GET", "/admin/v1/config", ""); code != 200 || !strings.Contains(body, d) {
+			t.Errorf("running revision = %s", body)
+		}
+		// ...and the file when it was edited
+		var cfg map[string]any
+		if err := yaml.Unmarshal([]byte(fileYAML()), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg["log"] = map[string]any{"level": "info"}
+		out, _ := yaml.Marshal(cfg)
+		if err := os.WriteFile(g.cfg, out, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.stop(); err != nil {
+			t.Fatalf("stop: %v", err)
+		}
+		g.start()
+		if got := active(); got == d {
+			t.Errorf("after editing the file the gateway still runs %s", got)
+		}
+		if code, body := call("GET", "/admin/v1/changes?limit=500", ""); code != 200 || !strings.Contains(body, `"actor":"startup"`) || !strings.Contains(body, "config.rollback") || !strings.Contains(body, "config.apply") {
+			t.Errorf("the history lacks the changes: %d %s", code, body)
 		}
 	})
 
