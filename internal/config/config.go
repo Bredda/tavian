@@ -387,11 +387,30 @@ type AdminConfig struct {
 }
 
 // AdminToken is one credential of the administration API. Its id names the
-// administrator or the tool in the record of every change it makes.
+// administrator or the tool in the record of every change it makes, its role
+// says what it may do.
 type AdminToken struct {
 	ID   string `yaml:"id"`
 	Hash string `yaml:"hash"` // "sha256:<64 hex>", from `tavian keygen -admin`
+	Role Role   `yaml:"role"` // admin, operator or auditor; required
 }
+
+// Role is what an administration token may do (docs/ADMIN_API.md).
+type Role string
+
+// The roles of the administration API, from the most to the least powerful.
+const (
+	// RoleAdmin may do everything, configuration changes included.
+	RoleAdmin Role = "admin"
+	// RoleOperator may read and operate the gateway: check a configuration and
+	// make it read its configuration file again; not change the configuration.
+	RoleOperator Role = "operator"
+	// RoleAuditor may read, and can change nothing.
+	RoleAuditor Role = "auditor"
+)
+
+// Valid says whether r is one of the roles.
+func (r Role) Valid() bool { return r == RoleAdmin || r == RoleOperator || r == RoleAuditor }
 
 // Load reads and parses the configuration file, returning the raw bytes too
 // (they identify the revision).

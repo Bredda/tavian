@@ -1,7 +1,5 @@
 # Mutants for the controller of cmd/tavian, see scripts/mutate.sh (needs TAVIAN_TEST_DATABASE_URL).
 # file	old	new
-cmd/tavian/control.go	if len(snap.AdminTokens) == 0 {	if false {
-cmd/tavian/control.go	case len(snap.AdminTokens) == 0:	case false:
 cmd/tavian/control.go	if _, ok := current.Keys[h]; !ok {	if _, ok := current.Keys[h]; ok {
 cmd/tavian/control.go	if _, ok := current.AdminTokens[h]; !ok {	if _, ok := current.AdminTokens[h]; ok {
 cmd/tavian/control.go	case act.FileRevision != file.Revision:	case false:
@@ -32,3 +30,5 @@ cmd/tavian/configcmd.go	if page.Next == "" {	if true {
 cmd/tavian/configcmd.go	revisions?limit=" + strconv.Itoa(min(limit-len(all), 500))	revisions?limit=" + strconv.Itoa(limit)
 cmd/tavian/configcmd.go	if limit < 1 || limit > 500 {	if limit < 1 || limit > 5000 {
 cmd/tavian/configcmd.go	if res.Unchanged {	if false {
+cmd/tavian/control.go	if !snap.HasAdmin() {	if false {
+cmd/tavian/control.go	case !snap.HasAdmin():	case false:

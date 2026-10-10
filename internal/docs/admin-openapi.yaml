@@ -16,6 +16,19 @@ info:
     `tavian keygen -admin`, put its hash in `admin.tokens` with an `id`, and
     reload. The `id` is the author named in the record of every change.
 
+    ## Roles
+
+    Each token has a role, set in `admin.tokens[].role`:
+
+    | Role | May |
+    |---|---|
+    | `auditor` | read: who you are, the running configuration, the revisions and their differences, the history of changes |
+    | `operator` | what an auditor may, and check a configuration (`validate`) and make the gateway read its configuration file again (`reload`) |
+    | `admin` | everything, applying and rolling back configurations included |
+
+    A call the role does not allow answers `403 forbidden`. Every operation below
+    names the lowest role that may make it in `x-required-role`.
+
     ## Changes are recorded before they happen
 
     Every call that changes (or tries to change) something is written to the
@@ -60,6 +73,7 @@ paths:
     get:
       tags: [Identity]
       operationId: whoami
+      x-required-role: auditor
       summary: Who the gateway thinks you are
       responses:
         "200":
@@ -73,10 +87,12 @@ paths:
                   actor: { type: string, examples: [ops-alice] }
                   method: { type: string, enum: [admin_token] }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /admin/v1/config:
     get:
       tags: [Configuration]
       operationId: showConfig
+      x-required-role: auditor
       summary: The running configuration revision
       description: A summary of what is running now. Nothing secret is returned.
       responses:
@@ -99,10 +115,12 @@ paths:
                     type: array
                     items: { type: string }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /admin/v1/config/revisions:
     get:
       tags: [Configuration]
       operationId: listRevisions
+      x-required-role: auditor
       summary: The revisions the gateway has run
       description: Newest first, without their content.
       parameters:
@@ -126,11 +144,13 @@ paths:
                     description: Pass it as `before` for the following page. Absent on the last page.
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/Unavailable" }
   /admin/v1/config/revisions/{id}:
     get:
       tags: [Configuration]
       operationId: showRevision
+      x-required-role: auditor
       summary: A revision with its content
       description: |
         The configuration YAML and the policy files, as they would be written to
@@ -150,12 +170,14 @@ paths:
               schema: { $ref: "#/components/schemas/Revision" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/Unavailable" }
   /admin/v1/config/diff:
     get:
       tags: [Configuration]
       operationId: diffRevisions
+      x-required-role: auditor
       summary: What differs between two revisions
       description: One entry per file that was added, removed or modified, with a unified diff.
       parameters:
@@ -190,12 +212,14 @@ paths:
                         diff: { type: string, description: Unified diff. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/Unavailable" }
   /admin/v1/config/validate:
     post:
       tags: [Configuration]
       operationId: validateConfig
+      x-required-role: operator
       summary: Check a configuration without applying it
       description: |
         The same validation as `tavian validate`, plus whether the configuration
@@ -215,10 +239,12 @@ paths:
               schema: { $ref: "#/components/schemas/Validation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
   /admin/v1/config/apply:
     post:
       tags: [Configuration]
       operationId: applyConfig
+      x-required-role: admin
       summary: Make a configuration the active one
       description: |
         Validates the configuration, records the change, and switches to it. It
@@ -245,6 +271,7 @@ paths:
               schema: { $ref: "#/components/schemas/Result" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Refused" }
         "413":
           description: The request is larger than 8 MiB.
@@ -257,6 +284,7 @@ paths:
     post:
       tags: [Configuration]
       operationId: rollbackConfig
+      x-required-role: admin
       summary: Make an earlier revision the active one again
       description: |
         Refused (`409 credentials_would_return`) when that revision holds an API
@@ -282,6 +310,7 @@ paths:
               schema: { $ref: "#/components/schemas/Result" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Refused" }
         "422": { $ref: "#/components/responses/Refused" }
@@ -290,6 +319,7 @@ paths:
     post:
       tags: [Configuration]
       operationId: reloadConfig
+      x-required-role: operator
       summary: Read the configuration file again
       description: |
         Does what `SIGHUP` does: compile the configuration file and its policy
@@ -303,6 +333,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Result" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Refused" }
         "422": { $ref: "#/components/responses/Refused" }
         "503": { $ref: "#/components/responses/NotMade" }
@@ -310,6 +341,7 @@ paths:
     get:
       tags: [History]
       operationId: listChanges
+      x-required-role: auditor
       summary: What the administrators changed
       description: Newest first. Each record is also in the audit chain, which `tavian verify-audit` checks.
       parameters:
@@ -336,6 +368,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "503":
           description: The history cannot be read.
           content:
@@ -358,6 +391,13 @@ components:
       scheme: bearer
       description: A token of `admin.tokens` (`tavadm_...`), not a data-plane API key.
   responses:
+    Forbidden:
+      description: |
+        The role of the token does not allow this call (`forbidden`). A refused
+        attempt to change something is recorded.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     Unauthenticated:
       description: The token is missing or unknown.
       headers:

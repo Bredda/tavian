@@ -23,7 +23,7 @@ func adminServer(t *testing.T, withTokens bool, adm *admin.Deps) (*httptest.Serv
 	holder := &config.Holder{}
 	snap := &config.Snapshot{Revision: "rev-1", AdminTokens: map[string]*config.AdminToken{}}
 	if withTokens {
-		snap.AdminTokens[auth.HashKey(adminSecret)] = &config.AdminToken{ID: "ops"}
+		snap.AdminTokens[auth.HashKey(adminSecret)] = &config.AdminToken{ID: "ops", Role: config.RoleAdmin}
 	}
 	holder.Store(snap)
 	m := NewMetrics()

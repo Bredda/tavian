@@ -20,31 +20,47 @@ tavian keygen -admin
 admin:
   tokens:
     - id: ops-alice          # names the author of every change this token makes
-    - ...
+      role: admin            # admin, operator or auditor: required, see below
+      hash: sha256:4b7e...   # from `tavian keygen -admin`
+    - id: audit-bob
+      role: auditor
+      hash: sha256:9c01...
 ```
 
-Each entry is `id` and `hash`. Reload (`SIGHUP`, or `POST /admin/v1/config/reload` with another token). The API also needs the database (`database.url_env`): a change that cannot be recorded must not be made, so the configuration is refused without it.
+Each entry is `id`, `role` and `hash`. At least one token must have the role admin. Reload (`SIGHUP`, or `POST /admin/v1/config/reload` with another token). The API also needs the database (`database.url_env`): a change that cannot be recorded must not be made, so the configuration is refused without it.
 
 Tokens are 256-bit random values and, like API keys, only their SHA-256 is stored ([API_KEYS.md](API_KEYS.md)). The `tavadm_` prefix keeps them apart from data-plane keys (`tav_`): neither kind is accepted where the other is expected. Give each person or tool its own token, with an `id` that says who it is: the id is what the change history shows. To revoke a token, remove its entry and reload. Expiry and rotation help are not built yet; OIDC sign-in for administrators is not built either, so today anyone who holds a token is an administrator.
 
 Failed authentications are logged (reason, request id and address, never the credential) and counted in `tavian_admin_requests_total{outcome="unauthenticated"}`. They are not throttled.
 
+## Roles
+
+Each token has a role, which says what it may do ([ADR-0016](adr/0016-admin-roles.md)):
+
+| Role | May |
+|---|---|
+| `auditor` | read: who you are, the running configuration, the revisions and what differs between them, the history of changes. Changes nothing |
+| `operator` | what an auditor may, and check a configuration (`validate`) and make the gateway read its configuration file again (`reload`) |
+| `admin` | everything, applying and rolling back configurations included |
+
+There is no default role: a token without one is refused when the configuration is loaded. A call that the role does not allow answers `403 forbidden`; when it was an attempt to change something (`reload`, `apply`, `rollback`) it is recorded like any other refused change, with the role, so that probing leaves a trace. A configuration must keep at least one token with the role admin (`no_admin_token` otherwise), or nobody could change it afterwards. Each operation names the lowest role that may call it (`x-required-role`) in the reference at `/admin/docs`.
+
 ## Calls
 
-Send `Authorization: Bearer tavadm_...`. Errors are `{"error": {"code": "...", "message": "..."}}` and every answer has an `X-Request-Id` (send your own to follow a call through the logs and the records).
+Send `Authorization: Bearer tavadm_...`. The role of the token decides what is allowed (the third column). Errors are `{"error": {"code": "...", "message": "..."}}` and every answer has an `X-Request-Id` (send your own to follow a call through the logs and the records).
 
-| Call | What it does |
-|---|---|
-| `GET /admin/v1/whoami` | The id of the token you used |
-| `GET /admin/v1/config` | The running revision: its id, profile, and how many models, backends, keys, tokens and policy files it holds, and the warnings. No secret and no file content |
-| `GET /admin/v1/config/revisions` | The revisions the gateway has run, newest first, with the active one marked |
-| `GET /admin/v1/config/revisions/{id}` | One revision with its configuration YAML and policy files (`active` stands for the active one) |
-| `GET /admin/v1/config/diff?from=&to=` | A unified diff per file between two revisions (`to` defaults to the active one) |
-| `POST /admin/v1/config/validate` | Checks a configuration (`{config, policies}`) like `tavian validate` does, and says whether it could replace the running one. Changes and records nothing |
-| `POST /admin/v1/config/apply` | Makes a configuration (`{config, policies, base}`) the active one |
-| `POST /admin/v1/config/rollback` | Makes an earlier revision (`{revision, base}`) the active one again |
-| `POST /admin/v1/config/reload` | Reads the configuration file and the policy directory again, as `SIGHUP` does |
-| `GET /admin/v1/changes` | What the administrators changed, newest first, `limit` and `before` to page |
+| Call | What it does | Role |
+|---|---|---|
+| `GET /admin/v1/whoami` | The id and the role of the token you used | auditor |
+| `GET /admin/v1/config` | The running revision: its id, profile, and how many models, backends, keys, tokens and policy files it holds, and the warnings. No secret and no file content | auditor |
+| `GET /admin/v1/config/revisions` | The revisions the gateway has run, newest first, with the active one marked | auditor |
+| `GET /admin/v1/config/revisions/{id}` | One revision with its configuration YAML and policy files (`active` stands for the active one) | auditor |
+| `GET /admin/v1/config/diff?from=&to=` | A unified diff per file between two revisions (`to` defaults to the active one) | auditor |
+| `POST /admin/v1/config/validate` | Checks a configuration (`{config, policies}`) like `tavian validate` does, and says whether it could replace the running one. Changes and records nothing | operator |
+| `POST /admin/v1/config/apply` | Makes a configuration (`{config, policies, base}`) the active one | admin |
+| `POST /admin/v1/config/rollback` | Makes an earlier revision (`{revision, base}`) the active one again | admin |
+| `POST /admin/v1/config/reload` | Reads the configuration file and the policy directory again, as `SIGHUP` does | operator |
+| `GET /admin/v1/changes` | What the administrators changed, newest first, `limit` and `before` to page | auditor |
 
 ## Revisions
 

@@ -159,11 +159,11 @@ func TestAdminAuthenticator(t *testing.T) {
 		t.Errorf("without a snapshot: %v", err)
 	}
 	h.Store(&config.Snapshot{
-		AdminTokens: map[string]*config.AdminToken{HashKey(token): {ID: "ops-alice"}},
+		AdminTokens: map[string]*config.AdminToken{HashKey(token): {ID: "ops-alice", Role: config.RoleOperator}},
 		Keys:        map[string]*config.APIKey{HashKey(key): {ID: "app"}},
 	})
 	who, err := a.Authenticate(req("Bearer " + token))
-	if err != nil || who.TokenID != "ops-alice" {
+	if err != nil || who.TokenID != "ops-alice" || who.Role != config.RoleOperator {
 		t.Fatalf("a valid token: %+v %v", who, err)
 	}
 	for name, authz := range map[string]string{

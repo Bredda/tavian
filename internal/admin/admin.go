@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -157,20 +158,79 @@ func Enabled(snap *config.Holder) bool {
 	return s != nil && len(s.AdminTokens) > 0
 }
 
+// Permission is what a call needs. Roles hold permissions, routes ask for one:
+// that is the only place where who may do what is decided.
+type Permission string
+
+const (
+	// PermRead is for calls that only look: the running configuration, the
+	// revisions, the history of changes.
+	PermRead Permission = "read"
+	// PermOperate is for calls that act without changing the configuration:
+	// checking one, and making the gateway read its file again.
+	PermOperate Permission = "operate"
+	// PermChange is for calls that change the configuration.
+	PermChange Permission = "change"
+)
+
+// permissions says what each role holds. A role that is not here holds nothing.
+var permissions = map[config.Role][]Permission{
+	config.RoleAuditor:  {PermRead},
+	config.RoleOperator: {PermRead, PermOperate},
+	config.RoleAdmin:    {PermRead, PermOperate, PermChange},
+}
+
+// Allows says whether a role holds a permission.
+func Allows(role config.Role, p Permission) bool {
+	return slices.Contains(permissions[role], p)
+}
+
+// RouteInfo describes a route of the API, for documentation and tests.
+type RouteInfo struct {
+	Method, Path string
+	Permission   Permission
+	// Mutating routes change the gateway when they succeed: a call that is
+	// refused for lack of a role is recorded like any other refused change.
+	Mutating bool
+}
+
+type route struct {
+	RouteInfo
+	action string
+	h      func(*api, http.ResponseWriter, *http.Request, call)
+}
+
+// routes is every route of the API. Nothing is served that is not listed here
+// with the permission it needs.
+var routes = []route{
+	{RouteInfo{"GET", "/whoami", PermRead, false}, "whoami", (*api).whoami},
+	{RouteInfo{"GET", "/config", PermRead, false}, "config.show", (*api).configShow},
+	{RouteInfo{"GET", "/changes", PermRead, false}, "changes.list", (*api).changes},
+	{RouteInfo{"GET", "/config/revisions", PermRead, false}, "revisions.list", (*api).revisions},
+	{RouteInfo{"GET", "/config/revisions/{id}", PermRead, false}, "revisions.show", (*api).revision},
+	{RouteInfo{"GET", "/config/diff", PermRead, false}, "revisions.diff", (*api).diff},
+	{RouteInfo{"POST", "/config/validate", PermOperate, false}, "config.validate", (*api).validate},
+	{RouteInfo{"POST", "/config/reload", PermOperate, true}, ActionReload, (*api).reload},
+	{RouteInfo{"POST", "/config/apply", PermChange, true}, ActionApply, (*api).apply},
+	{RouteInfo{"POST", "/config/rollback", PermChange, true}, ActionRollback, (*api).rollback},
+}
+
+// Routes lists the routes of the API with the permission each one needs.
+func Routes() []RouteInfo {
+	out := make([]RouteInfo, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, RouteInfo{r.Method, Prefix + r.Path, r.Permission, r.Mutating})
+	}
+	return out
+}
+
 // Register adds the API to mux. The routes answer 404 while no admin token is
 // configured.
 func Register(mux *http.ServeMux, d Deps) {
 	a := &api{Deps: d, auth: auth.AdminAuthenticator{Snap: d.Snap}}
-	mux.HandleFunc("GET "+Prefix+"/whoami", a.handle("whoami", a.whoami))
-	mux.HandleFunc("GET "+Prefix+"/config", a.handle("config.show", a.configShow))
-	mux.HandleFunc("GET "+Prefix+"/changes", a.handle("changes.list", a.changes))
-	mux.HandleFunc("GET "+Prefix+"/config/revisions", a.handle("revisions.list", a.revisions))
-	mux.HandleFunc("GET "+Prefix+"/config/revisions/{id}", a.handle("revisions.show", a.revision))
-	mux.HandleFunc("GET "+Prefix+"/config/diff", a.handle("revisions.diff", a.diff))
-	mux.HandleFunc("POST "+Prefix+"/config/validate", a.handle("config.validate", a.validate))
-	mux.HandleFunc("POST "+Prefix+"/config/reload", a.handle(ActionReload, a.reload))
-	mux.HandleFunc("POST "+Prefix+"/config/apply", a.handle(ActionApply, a.apply))
-	mux.HandleFunc("POST "+Prefix+"/config/rollback", a.handle(ActionRollback, a.rollback))
+	for _, r := range routes {
+		mux.HandleFunc(r.Method+" "+Prefix+r.Path, a.handle(r, func(w http.ResponseWriter, req *http.Request, c call) { r.h(a, w, req, c) }))
+	}
 }
 
 type api struct {
@@ -181,14 +241,17 @@ type api struct {
 // call is what a handler knows about the request it serves.
 type call struct {
 	actor     string
+	role      config.Role
 	requestID string
 	remote    string
 }
 
 type handler func(w http.ResponseWriter, r *http.Request, c call)
 
-// handle authenticates, then runs h. The API is invisible without tokens.
-func (a *api) handle(action string, h handler) http.HandlerFunc {
+// handle authenticates, checks the role, then runs h. The API is invisible
+// without tokens.
+func (a *api) handle(rt route, h handler) http.HandlerFunc {
+	action := rt.action
 	return func(w http.ResponseWriter, r *http.Request) {
 		hd := w.Header()
 		hd.Set("Cache-Control", "no-store")
@@ -210,8 +273,27 @@ func (a *api) handle(action string, h handler) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "a valid admin token is required")
 			return
 		}
-		h(w, r, call{actor: who.TokenID, requestID: id, remote: remoteHost(r)})
+		c := call{actor: who.TokenID, role: who.Role, requestID: id, remote: remoteHost(r)}
+		if !Allows(who.Role, rt.Permission) {
+			a.forbid(w, r, c, rt)
+			return
+		}
+		h(w, r, c)
 	}
+}
+
+// forbid answers a call whose token lacks the permission. An attempt to change
+// something is recorded, like any other refused change.
+func (a *api) forbid(w http.ResponseWriter, r *http.Request, c call, rt route) {
+	a.Log.InfoContext(r.Context(), "admin call refused: the role is not enough", "action", rt.action, "actor", c.actor,
+		"role", string(c.role), "needs", string(rt.Permission), "request_id", c.requestID)
+	a.observe(rt.action, "forbidden")
+	if rt.Mutating && a.Store != nil {
+		if err := a.recordChange(r.Context(), c, rt.action, "", store.OutcomeRejected, map[string]string{"code": "forbidden", "role": string(c.role)}); err != nil {
+			a.Log.ErrorContext(r.Context(), "the refusal of an admin change could not be recorded", "error", err, "request_id", c.requestID)
+		}
+	}
+	writeError(w, http.StatusForbidden, "forbidden", "this call needs the permission "+string(rt.Permission)+", which the role "+string(c.role)+" of your token does not hold")
 }
 
 func remoteHost(r *http.Request) string {
@@ -222,7 +304,7 @@ func remoteHost(r *http.Request) string {
 }
 
 func (a *api) whoami(w http.ResponseWriter, _ *http.Request, c call) {
-	writeJSON(w, http.StatusOK, map[string]string{"actor": c.actor, "method": "admin_token"})
+	writeJSON(w, http.StatusOK, map[string]string{"actor": c.actor, "method": "admin_token", "role": string(c.role)})
 }
 
 func (a *api) configShow(w http.ResponseWriter, _ *http.Request, _ call) {

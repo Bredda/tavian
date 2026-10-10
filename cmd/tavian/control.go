@@ -72,7 +72,8 @@ func conflicting(format string, args ...any) *admin.Rejection {
 
 // build compiles a configuration and checks that it can replace the running
 // one: nothing in it needs a restart, and the administration API keeps at
-// least one token (a configuration without one would lock everyone out).
+// least one admin token (a configuration without one would lock everyone out
+// of changing it).
 func (c *controller) build(cfg *config.Config, raw []byte) (*candidate, error) {
 	if err := restartRequired(c.running, cfg); err != nil {
 		return nil, &admin.Rejection{Code: "restart_required", Message: err.Error(), Status: http.StatusConflict}
@@ -81,14 +82,14 @@ func (c *controller) build(cfg *config.Config, raw []byte) (*candidate, error) {
 	if err != nil {
 		return nil, reject("invalid_configuration", "%s", err)
 	}
-	if len(snap.AdminTokens) == 0 {
+	if !snap.HasAdmin() {
 		return nil, noAdminToken()
 	}
 	return &candidate{raw: raw, snap: snap}, nil
 }
 
 func noAdminToken() *admin.Rejection {
-	return reject("no_admin_token", "the configuration lists no admin token: nobody could use the administration API afterwards")
+	return reject("no_admin_token", "the configuration lists no admin token with the role admin: nobody could change the configuration through the administration API afterwards")
 }
 
 // fromBytes reads a configuration given as bytes, the way Load reads a file.
@@ -292,7 +293,7 @@ func (c *controller) Validate(_ context.Context, req admin.ApplyRequest) admin.V
 	switch err := restartRequired(c.running, cfg); {
 	case err != nil:
 		v.Applicable, v.Reason = false, "restart_required: "+err.Error()
-	case len(snap.AdminTokens) == 0:
+	case !snap.HasAdmin():
 		v.Applicable, v.Reason = false, "no_admin_token: "+noAdminToken().Message
 	}
 	return v

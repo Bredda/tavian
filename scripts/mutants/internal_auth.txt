@@ -1,6 +1,7 @@
 # Mutants for the admin authenticator of internal/auth, see scripts/mutate.sh.
 # file	old	new
 internal/auth/auth.go	t, ok := s.AdminTokens[HashKey(token)]	t, ok := s.AdminTokens[token]
-internal/auth/auth.go	return &Admin{TokenID: t.ID}, nil	return &Admin{TokenID: t.ID + "x"}, nil
+internal/auth/auth.go	return &Admin{TokenID: t.ID, Role: t.Role}, nil	return &Admin{TokenID: t.ID + "x", Role: t.Role}, nil
 internal/auth/auth.go	const AdminTokenPrefix = "tavadm_"	const AdminTokenPrefix = "tav_"
 internal/auth/auth.go	return generate(AdminTokenPrefix)	return generate(KeyPrefix)
+internal/auth/auth.go	Role: t.Role}, nil	Role: config.RoleAdmin}, nil

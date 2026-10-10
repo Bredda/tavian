@@ -48,8 +48,11 @@ func bearer(r *http.Request) (string, bool) {
 }
 
 // Admin is the authenticated principal of the administration API: the token's
-// id, which names the author of every change it makes.
-type Admin struct{ TokenID string }
+// id, which names the author of every change it makes, and its role.
+type Admin struct {
+	TokenID string
+	Role    config.Role
+}
 
 // AdminAuthenticator validates `Authorization: Bearer <token>` against the
 // administration tokens of the current config snapshot. Data-plane API keys
@@ -71,7 +74,7 @@ func (a AdminAuthenticator) Authenticate(r *http.Request) (*Admin, error) {
 	if !ok {
 		return nil, unauthenticated("unknown admin token")
 	}
-	return &Admin{TokenID: t.ID}, nil
+	return &Admin{TokenID: t.ID, Role: t.Role}, nil
 }
 
 // Identity is the authenticated principal, the input to every later decision.
