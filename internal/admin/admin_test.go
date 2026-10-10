@@ -17,6 +17,7 @@ import (
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
 	"github.com/bredda/tavian/internal/store"
+	"github.com/bredda/tavian/internal/textdiff"
 )
 
 type fakeStore struct {
@@ -523,7 +524,7 @@ func TestDiffBetweenRevisions(t *testing.T) {
 	res, body := f.do(t, "GET", "/admin/v1/config/diff?from=111111111111", secret, "")
 	var d struct {
 		From, To string
-		Files    []fileDiff
+		Files    []textdiff.FileDiff
 	}
 	if err := json.Unmarshal([]byte(body), &d); err != nil || res.StatusCode != 200 || d.From != "111111111111" || d.To != "222222222222" {
 		t.Fatalf("diff: %d %s", res.StatusCode, body)

@@ -351,8 +351,14 @@ func (g *gateway) adminCall(method, path, token, body string) (int, string) {
 
 func (g *gateway) tavian(args ...string) (string, int) {
 	g.t.Helper()
+	return g.tavianEnv(nil, args...)
+}
+
+// tavianEnv runs a command of the binary with more environment.
+func (g *gateway) tavianEnv(env []string, args ...string) (string, int) {
+	g.t.Helper()
 	cmd := exec.Command(g.bin, args...)
-	cmd.Env = g.env()
+	cmd.Env = append(g.env(), env...)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	var exit *exec.ExitError
@@ -852,6 +858,112 @@ func TestFinanceDemo(t *testing.T) {
 		}
 		if code, body := call("GET", "/admin/v1/changes?limit=500", ""); code != 200 || !strings.Contains(body, `"actor":"startup"`) || !strings.Contains(body, "config.rollback") || !strings.Contains(body, "config.apply") {
 			t.Errorf("the history lacks the changes: %d %s", code, body)
+		}
+	})
+
+	// 4d. The same, from the command line: export what runs, change it, look at
+	//     the difference, check it, apply it, go back.
+	t.Run("the config command drives a running gateway", func(t *testing.T) {
+		cli := func(args ...string) (string, int) {
+			out, code := g.tavianEnv([]string{"TAVIAN_ADMIN_TOKEN=" + adminToken, "TAVIAN_ADMIN_URL=http://" + g.admin}, append([]string{"config"}, args...)...)
+			if strings.Contains(out, adminToken) {
+				t.Errorf("the token was printed by `config %v`:\n%s", args, out)
+			}
+			return out, code
+		}
+		if out, code := cli("list", "-limit", "50"); code != 0 || !strings.Contains(out, "active") || !strings.HasPrefix(out, "REVISION") {
+			t.Fatalf("list: %d\n%s", code, out)
+		}
+		dir := filepath.Join(t.TempDir(), "export")
+		out, code := cli("export", "-o", dir)
+		if code != 0 {
+			t.Fatalf("export: %d\n%s", code, out)
+		}
+		tavianYAML, pols := filepath.Join(dir, "tavian.yaml"), filepath.Join(dir, "policies")
+		if entries, err := os.ReadDir(pols); err != nil || len(entries) < 2 {
+			t.Fatalf("exported policies: %v %v", entries, err)
+		}
+
+		// what was exported is what runs: applying it changes nothing
+		if out, code := cli("diff", "-config", tavianYAML, "-policies", pols); code != 0 || !strings.Contains(out, "is the same as revision") {
+			t.Errorf("diff of the export: %d\n%s", code, out)
+		}
+		if out, code := cli("apply", "-config", tavianYAML, "-policies", pols); code != 0 || !strings.Contains(out, "already active") {
+			t.Errorf("apply of the export: %d\n%s", code, out)
+		}
+
+		// change it: another log level
+		raw, err := os.ReadFile(tavianYAML)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg map[string]any
+		if err := yaml.Unmarshal(raw, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg["log"] = map[string]any{"level": "debug"}
+		changed, _ := yaml.Marshal(cfg)
+		if err := os.WriteFile(tavianYAML, changed, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if out, code := cli("diff", "-config", tavianYAML, "-policies", pols); code != 0 || !strings.Contains(out, "+    level: debug") {
+			t.Errorf("diff: %d\n%s", code, out)
+		}
+		if out, code := cli("validate", "-config", tavianYAML, "-policies", pols); code != 0 || !strings.Contains(out, "the running gateway can take it") {
+			t.Errorf("validate: %d\n%s", code, out)
+		}
+		before, _ := cli("show")
+		if out, code := cli("apply", "-config", tavianYAML, "-policies", pols, "-dry-run"); code != 0 || !strings.Contains(out, "would make revision") {
+			t.Errorf("dry run: %d\n%s", code, out)
+		}
+		if after, _ := cli("show"); after != before {
+			t.Error("a dry run changed the active revision")
+		}
+		out, code = cli("apply", "-config", tavianYAML, "-policies", pols)
+		if code != 0 || !strings.Contains(out, "applied: revision") {
+			t.Fatalf("apply: %d\n%s", code, out)
+		}
+		if after, _ := cli("show"); after == before || !strings.Contains(after, "level: debug") {
+			t.Errorf("the change is not active:\n%s", after)
+		}
+
+		// refused things say why and exit with 1
+		cfg["profile"] = "open-egress"
+		bad, _ := yaml.Marshal(cfg)
+		if err := os.WriteFile(tavianYAML, bad, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if out, code := cli("apply", "-config", tavianYAML, "-policies", pols); code != 1 || !strings.Contains(out, "restart_required") {
+			t.Errorf("a profile change: %d\n%s", code, out)
+		}
+		if out, code := cli("validate", "-config", tavianYAML, "-policies", pols); code != 1 || !strings.Contains(out, "cannot take it") {
+			t.Errorf("validate of a profile change: %d\n%s", code, out)
+		}
+
+		// and back
+		rout, code := cli("list", "-limit", "50")
+		var revs []string
+		for _, l := range strings.Split(rout, "\n")[1:] {
+			if f := strings.Fields(l); len(f) > 0 {
+				revs = append(revs, f[0])
+			}
+		}
+		if code != 0 || len(revs) < 3 {
+			t.Fatalf("list: %d\n%s", code, rout)
+		}
+		if out, code := cli("rollback", "-revision", revs[1]); code != 0 || !strings.Contains(out, "rolled back: revision "+revs[1]) {
+			t.Errorf("rollback: %d\n%s", code, out)
+		}
+		if out, code := cli("history", "-limit", "10"); code != 0 || !strings.Contains(out, "e2e-admin") || !strings.Contains(out, "config.rollback") || !strings.Contains(out, "rejected") {
+			t.Errorf("history: %d\n%s", code, out)
+		}
+		if out, code := cli("reload"); code != 0 || !strings.Contains(out, "revision") {
+			t.Errorf("reload: %d\n%s", code, out)
+		}
+		// without the token nothing works
+		out, code = g.tavianEnv([]string{"TAVIAN_ADMIN_TOKEN="}, "config", "list", "-server", "http://"+g.admin)
+		if code != 1 || !strings.Contains(out, "TAVIAN_ADMIN_TOKEN") {
+			t.Errorf("no token: %d %s", code, out)
 		}
 	})
 

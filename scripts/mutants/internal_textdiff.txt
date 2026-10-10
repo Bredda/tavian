@@ -1,0 +1,12 @@
+# Mutants for internal/textdiff, see scripts/mutate.sh.
+# file	old	new
+internal/textdiff/diff.go	diffContext = 3	diffContext = 2
+internal/textdiff/diff.go	case lcs[(i+1)*w+j] >= lcs[i*w+j+1]:	case lcs[(i+1)*w+j] < lcs[i*w+j+1]:
+internal/textdiff/diff.go	if a[i] == b[j] {	if a[i] != b[j] {
+internal/textdiff/diff.go	if k == len(ops) || k-end > 2*diffContext {	if k == len(ops) || k-end > diffContext {
+internal/textdiff/diff.go	diffCells = 4_000_000	diffCells = 4
+internal/textdiff/diff.go	for pre < len(a) && pre < len(b) && a[pre] == b[pre] {	for pre < len(a) && pre < len(b) && a[pre] != b[pre] {
+internal/textdiff/diff.go	return fmt.Sprintf("%d,0", start)	return fmt.Sprintf("%d,0", start+1)
+internal/textdiff/diff.go	case x != y:	case true:
+internal/textdiff/diff.go	return dj	return di
+internal/textdiff/diff.go	case !inAfter:	case !inAfter && false:

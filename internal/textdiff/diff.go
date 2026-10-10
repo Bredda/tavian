@@ -1,7 +1,10 @@
-package admin
+// Package textdiff compares two texts line by line and writes the difference
+// in the unified format, for configuration revisions (docs/ADMIN_API.md).
+package textdiff
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -25,10 +28,10 @@ func splitLines(s string) []string {
 	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
 }
 
-// unifiedDiff renders the difference between two versions of a file in the
+// Unified renders the difference between two versions of a file in the
 // unified format, with three lines of context. added and removed say that one
 // side does not exist.
-func unifiedDiff(name, before, after string, added, removed bool) string {
+func Unified(name, before, after string, added, removed bool) string {
 	a, b := splitLines(before), splitLines(after)
 	var sb strings.Builder
 	switch {
@@ -168,4 +171,53 @@ func middle(a, b []string) []diffOp {
 		ops = append(ops, diffOp{'+', b[j]})
 	}
 	return ops
+}
+
+// Named is a file with its text.
+type Named struct{ Name, Text string }
+
+// FileDiff is the difference of one file between two sets of files.
+type FileDiff struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // added, removed or modified
+	Diff   string `json:"diff"`
+}
+
+// Files compares two sets of files by name and returns one entry per file that
+// was added, removed or modified; files that are the same are left out. Files
+// at the top level come first, then the ones in directories, each sorted.
+func Files(before, after []Named) []FileDiff {
+	b, a := map[string]string{}, map[string]string{}
+	var names []string
+	for _, f := range before {
+		b[f.Name] = f.Text
+		names = append(names, f.Name)
+	}
+	for _, f := range after {
+		if _, ok := b[f.Name]; !ok {
+			names = append(names, f.Name)
+		}
+		a[f.Name] = f.Text
+	}
+	sort.Slice(names, func(i, j int) bool {
+		di, dj := strings.Contains(names[i], "/"), strings.Contains(names[j], "/")
+		if di != dj {
+			return dj
+		}
+		return names[i] < names[j]
+	})
+	out := []FileDiff{}
+	for _, n := range names {
+		x, inBefore := b[n]
+		y, inAfter := a[n]
+		switch {
+		case !inBefore:
+			out = append(out, FileDiff{n, "added", Unified(n, "", y, true, false)})
+		case !inAfter:
+			out = append(out, FileDiff{n, "removed", Unified(n, x, "", false, true)})
+		case x != y:
+			out = append(out, FileDiff{n, "modified", Unified(n, x, y, false, false)})
+		}
+	}
+	return out
 }

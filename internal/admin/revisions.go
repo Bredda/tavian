@@ -11,6 +11,7 @@ import (
 
 	"github.com/bredda/tavian/internal/policy"
 	"github.com/bredda/tavian/internal/store"
+	"github.com/bredda/tavian/internal/textdiff"
 )
 
 // revisionID is the form of a revision id; "active" stands for the active one.
@@ -125,13 +126,6 @@ func (a *api) revision(w http.ResponseWriter, r *http.Request, _ call) {
 	}
 }
 
-// fileDiff is the difference of one file between two revisions.
-type fileDiff struct {
-	Name   string `json:"name"`
-	Status string `json:"status"` // added, removed or modified
-	Diff   string `json:"diff"`
-}
-
 func (a *api) diff(w http.ResponseWriter, r *http.Request, _ call) {
 	from, to := r.URL.Query().Get("from"), r.URL.Query().Get("to")
 	if from == "" {
@@ -149,39 +143,16 @@ func (a *api) diff(w http.ResponseWriter, r *http.Request, _ call) {
 	if !ok {
 		return
 	}
-	files := []fileDiff{}
-	add := func(name string, before, after *string) {
-		switch {
-		case before == nil:
-			files = append(files, fileDiff{name, "added", unifiedDiff(name, "", *after, true, false)})
-		case after == nil:
-			files = append(files, fileDiff{name, "removed", unifiedDiff(name, *before, "", false, true)})
-		case *before != *after:
-			files = append(files, fileDiff{name, "modified", unifiedDiff(name, *before, *after, false, false)})
-		}
+	writeJSON(w, http.StatusOK, map[string]any{"from": x.Revision, "to": y.Revision, "files": textdiff.Files(x.named(), y.named())})
+}
+
+// named lists the files of a revision for comparing.
+func (v revisionContent) named() []textdiff.Named {
+	out := []textdiff.Named{{Name: "tavian.yaml", Text: v.Config}}
+	for _, p := range v.Policies {
+		out = append(out, textdiff.Named{Name: "policies/" + p.Name, Text: p.YAML})
 	}
-	add("tavian.yaml", &x.Config, &y.Config)
-	byName := map[string][2]*string{}
-	names := []string{}
-	for i := range x.Policies {
-		p := byName[x.Policies[i].Name]
-		p[0] = &x.Policies[i].YAML
-		byName[x.Policies[i].Name] = p
-		names = append(names, x.Policies[i].Name)
-	}
-	for i := range y.Policies {
-		p, seen := byName[y.Policies[i].Name]
-		p[1] = &y.Policies[i].YAML
-		byName[y.Policies[i].Name] = p
-		if !seen {
-			names = append(names, y.Policies[i].Name)
-		}
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		add("policies/"+n, byName[n][0], byName[n][1])
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"from": x.Revision, "to": y.Revision, "files": files})
+	return out
 }
 
 // paging reads limit and before; it answers the error itself.

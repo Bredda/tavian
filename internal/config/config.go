@@ -410,7 +410,7 @@ func Load(path string) (*Config, []byte, error) {
 		if !filepath.IsAbs(pdir) {
 			pdir = filepath.Join(dir, pdir)
 		}
-		if cfg.PolicySources, err = readPolicyDir(pdir); err != nil {
+		if cfg.PolicySources, err = ReadPolicyDir(pdir); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -418,9 +418,13 @@ func Load(path string) (*Config, []byte, error) {
 }
 
 // policyFileName is what a policy file of a revision may be called: a plain
-// file name as readPolicyDir finds it (no directory part, not hidden), so that
+// file name as ReadPolicyDir finds it (no directory part, not hidden), so that
 // exporting a revision to a directory cannot write anywhere else.
 var policyFileName = regexp.MustCompile(`^[^/\\\x00-\x1f.][^/\\\x00-\x1f]*\.ya?ml$`)
+
+// ValidPolicyFileName says whether name is a plain policy file name: no
+// directory part, not hidden, ending in .yaml or .yml.
+func ValidPolicyFileName(name string) bool { return policyFileName.MatchString(name) }
 
 // FromRevision builds a Config from the stored form of a revision: the YAML
 // and the policy files it was made from (the ones Load reads from policy.dir).
@@ -436,7 +440,7 @@ func FromRevision(raw []byte, policies []policy.Source, dir string) (*Config, er
 	}
 	seen := map[string]bool{}
 	for _, p := range policies {
-		if !policyFileName.MatchString(p.Name) {
+		if !ValidPolicyFileName(p.Name) {
 			return nil, fmt.Errorf("policy file %q: the name must be a plain file name ending in .yaml or .yml", p.Name)
 		}
 		if seen[p.Name] {
@@ -448,9 +452,9 @@ func FromRevision(raw []byte, policies []policy.Source, dir string) (*Config, er
 	return cfg, nil
 }
 
-// readPolicyDir reads the *.yaml and *.yml files of dir, not recursively,
+// ReadPolicyDir reads the *.yaml and *.yml files of dir, not recursively,
 // ignoring hidden files.
-func readPolicyDir(dir string) ([]policy.Source, error) {
+func ReadPolicyDir(dir string) ([]policy.Source, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("policy.dir: %w", err)

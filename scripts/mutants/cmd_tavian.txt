@@ -16,3 +16,19 @@ cmd/tavian/control.go	detail["unchanged"] = previous == snap.Revision	detail["un
 cmd/tavian/control.go	if err := restartRequired(c.running, cfg); err != nil {	if err := restartRequired(c.running, cfg); err != nil && false {
 cmd/tavian/control.go	Actor: actorSighup, Action: admin.ActionReload,	Actor: actorSighup, Action: "x",
 cmd/tavian/control.go	previous := c.holder.Load().Revision	previous := ""
+cmd/tavian/configcmd.go	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },	CheckRedirect: nil,
+cmd/tavian/configcmd.go	if u.Scheme == "http" && !isLoopback(u.Hostname()) {	if u.Scheme == "http" && isLoopback(u.Hostname()) {
+cmd/tavian/configcmd.go	if host == "localhost" {	if host == "localhostx" {
+cmd/tavian/configcmd.go	return ip != nil && ip.IsLoopback()	return ip != nil
+cmd/tavian/configcmd.go	if !config.ValidPolicyFileName(p.Name) {	if false {
+cmd/tavian/configcmd.go	len(entries) > 0 && !force	len(entries) > 0 && force
+cmd/tavian/configcmd.go	req.Header.Set("Authorization", "Bearer "+c.token)	req.Header.Set("Authorization", c.token)
+cmd/tavian/configcmd.go	if resp.StatusCode < 200 || resp.StatusCode > 299 {	if resp.StatusCode < 200 || resp.StatusCode > 399 {
+cmd/tavian/configcmd.go	req.Base = base	req.Base = ""
+cmd/tavian/configcmd.go	if !v.Valid || !v.Applicable {	if !v.Valid {
+cmd/tavian/configcmd.go	if v.Valid && v.Applicable {	if v.Valid {
+cmd/tavian/configcmd.go	if err := os.WriteFile(filepath.Join(pdir, p.Name), []byte(p.YAML), 0o600); err != nil {	if err := os.WriteFile(filepath.Join(pdir, p.Name), []byte(p.YAML), 0o644); err != nil {
+cmd/tavian/configcmd.go	if page.Next == "" {	if true {
+cmd/tavian/configcmd.go	revisions?limit=" + strconv.Itoa(min(limit-len(all), 500))	revisions?limit=" + strconv.Itoa(limit)
+cmd/tavian/configcmd.go	if limit < 1 || limit > 500 {	if limit < 1 || limit > 5000 {
+cmd/tavian/configcmd.go	if res.Unchanged {	if false {

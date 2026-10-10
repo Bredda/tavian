@@ -50,7 +50,10 @@ for file in "${!seen[@]}"; do
   git diff --quiet HEAD -- "$file" || { echo "$file has uncommitted changes: commit them first" >&2; exit 2; }
 done
 
-restore() { for file in "${!seen[@]}"; do git checkout -q HEAD -- "$file"; done; }
+restore() {
+  local f
+  for f in "${!seen[@]}"; do git checkout -q HEAD -- "$f"; done
+}
 trap restore EXIT
 trap 'exit 130' INT TERM
 
