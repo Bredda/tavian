@@ -40,6 +40,7 @@ Commands:
   validate   Check a configuration file and exit
   migrate    Apply pending database migrations and exit
   policy     Test policies against fixtures: tavian policy test
+  config     Manage the configuration of a running gateway through its admin API
   keygen     Generate an API key (or, with -admin, an administration token) and the hash to put in the configuration
   audit-keygen  Generate the key that signs the seals of the audit chain
   verify-audit  Check the audit chain, its seals and the records it covers
@@ -64,6 +65,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdMigrate(args[1:], stdout, stderr)
 	case "policy":
 		return cmdPolicy(args[1:], stdout, stderr)
+	case "config":
+		return cmdConfig(args[1:], stdout, stderr)
 	case "keygen":
 		return cmdKeygen(args[1:], stdout, stderr)
 	case "audit-keygen":

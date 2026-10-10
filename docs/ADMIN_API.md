@@ -65,6 +65,27 @@ What a change is refused for, with nothing changed and the attempt recorded:
 
 **Limits.** With several gateways on one database, a change is made on the gateway that received it; the others pick the active revision up when they restart. Making them follow is planned. The file on disk is not rewritten by the API: after an `apply`, the file and the active revision differ until the file is edited or `reload` reads it again.
 
+## The command line
+
+`tavian config` is the same API from a terminal. It reads the token from `TAVIAN_ADMIN_TOKEN` (never from a flag, which would show in the process list) and the server from `-server` or `TAVIAN_ADMIN_URL` (default `http://127.0.0.1:9090`). It warns when the token would cross a network without TLS, and it never follows a redirect, since the token would go with it. `-json` prints the answer of the API as it is.
+
+```bash
+export TAVIAN_ADMIN_TOKEN=tavadm_...
+tavian config list                              # revisions, newest first; the active one is marked
+tavian config show [REVISION]                   # the active one by default
+tavian config export -o ./conf                  # conf/tavian.yaml and conf/policies/*.yaml
+# edit them, then:
+tavian config diff -config conf/tavian.yaml -policies conf/policies      # against the active revision
+tavian config validate -config conf/tavian.yaml -policies conf/policies  # same checks as `tavian validate`, and can the gateway take it?
+tavian config apply -config conf/tavian.yaml -policies conf/policies -dry-run
+tavian config apply -config conf/tavian.yaml -policies conf/policies
+tavian config rollback -revision 4b7e1c0a9d32
+tavian config reload                            # read the gateway's own file again
+tavian config history                           # who changed what
+```
+
+`apply` asks the gateway which revision is active and sends it as `base`, so a change made by someone else in between is refused, not overwritten; `-base` pins it. Without `-policies` the policy files are those of `policy.dir` of the configuration file, read relative to it, as the gateway reads them. `validate` and `apply -dry-run` exit with 1 when the configuration is invalid or cannot be applied; a refusal of `apply` or `rollback` prints its code and reason and exits with 1. An exported revision applied as it is changes nothing: the revision is a hash of the bytes. `export` does not write into a directory that has files in it without `-force`, and never writes a policy file whose name could leave the directory.
+
 ## Every change is recorded first
 
 A call that changes something (`apply`, `rollback`, `reload`, and the choice made at start) is recorded **before** it takes effect, in one transaction:

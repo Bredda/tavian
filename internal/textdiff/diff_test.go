@@ -1,4 +1,4 @@
-package admin
+package textdiff
 
 import (
 	"fmt"
@@ -100,17 +100,17 @@ func TestUnifiedDiffGolden(t *testing.T) {
  l
 +m
 `
-	if got := unifiedDiff("x.yaml", before, after, false, false); got != want {
+	if got := Unified("x.yaml", before, after, false, false); got != want {
 		t.Errorf("diff:\n%s\nwant:\n%s", got, want)
 	}
-	if got := unifiedDiff("x.yaml", "a\nb\n", "a\nb\n", false, false); strings.Contains(got, "@@") {
+	if got := Unified("x.yaml", "a\nb\n", "a\nb\n", false, false); strings.Contains(got, "@@") {
 		t.Errorf("identical files have a hunk:\n%s", got)
 	}
-	added := unifiedDiff("p.yaml", "", "one\ntwo\n", true, false)
+	added := Unified("p.yaml", "", "one\ntwo\n", true, false)
 	if added != "--- /dev/null\n+++ b/p.yaml\n@@ -0,0 +1,2 @@\n+one\n+two\n" {
 		t.Errorf("added:\n%s", added)
 	}
-	removed := unifiedDiff("p.yaml", "one\n", "", false, true)
+	removed := Unified("p.yaml", "one\n", "", false, true)
 	if removed != "--- a/p.yaml\n+++ /dev/null\n@@ -1 +0,0 @@\n-one\n" {
 		t.Errorf("removed:\n%s", removed)
 	}
@@ -131,7 +131,7 @@ func TestUnifiedDiffReproducesTheNewFile(t *testing.T) {
 	}
 	for i := 0; i < 500; i++ {
 		before, after := gen(), gen()
-		d := unifiedDiff("f", before, after, false, false)
+		d := Unified("f", before, after, false, false)
 		got := applyDiff(t, before, d)
 		if want := strings.Join(splitLines(after), "\n"); got != want {
 			t.Fatalf("case %d: applying the diff gives\n%q\nwant\n%q\ndiff:\n%s\nbefore:\n%q", i, got, want, d, before)
@@ -148,7 +148,7 @@ func TestUnifiedDiffOfHugeFilesStillWorks(t *testing.T) {
 		fmt.Fprintf(&a, "line %d\n", i)
 		fmt.Fprintf(&b, "other %d\n", i)
 	}
-	d := unifiedDiff("big", a.String(), b.String(), false, false)
+	d := Unified("big", a.String(), b.String(), false, false)
 	if got := applyDiff(t, a.String(), d); got != strings.Join(splitLines(b.String()), "\n") {
 		t.Error("the diff of two large files does not reproduce the new one")
 	}
@@ -161,7 +161,7 @@ func TestUnifiedDiffKeepsDistantChangesInSeparateHunks(t *testing.T) {
 		b = append(b, fmt.Sprint("l", i))
 	}
 	b[2], b[30] = "X", "Y"
-	d := unifiedDiff("f", strings.Join(a, "\n")+"\n", strings.Join(b, "\n")+"\n", false, false)
+	d := Unified("f", strings.Join(a, "\n")+"\n", strings.Join(b, "\n")+"\n", false, false)
 	if n := strings.Count(d, "@@ -"); n != 2 {
 		t.Errorf("%d hunks, want 2:\n%s", n, d)
 	}
@@ -169,8 +169,33 @@ func TestUnifiedDiffKeepsDistantChangesInSeparateHunks(t *testing.T) {
 	b[8] = "Z" // within 2*context of 30? no: 22 apart, still separate
 	b[30] = "Y"
 	b[27] = "W" // 3 apart from 30: one hunk
-	d = unifiedDiff("f", strings.Join(a, "\n")+"\n", strings.Join(b, "\n")+"\n", false, false)
+	d = Unified("f", strings.Join(a, "\n")+"\n", strings.Join(b, "\n")+"\n", false, false)
 	if n := strings.Count(d, "@@ -"); n != 2 {
 		t.Errorf("%d hunks, want 2 (a pair of near changes and a distant one):\n%s", n, d)
+	}
+}
+
+func TestFilesReportsWhatWasAddedRemovedAndModified(t *testing.T) {
+	before := []Named{{"tavian.yaml", "a\n"}, {"policies/keep.yaml", "k\n"}, {"policies/gone.yaml", "g\n"}, {"policies/edit.yaml", "1\n"}}
+	after := []Named{{"policies/new.yaml", "n\n"}, {"policies/edit.yaml", "2\n"}, {"policies/keep.yaml", "k\n"}, {"tavian.yaml", "b\n"}}
+	got := Files(before, after)
+	var names, statuses []string
+	for _, f := range got {
+		names, statuses = append(names, f.Name), append(statuses, f.Status)
+	}
+	if strings.Join(names, ",") != "tavian.yaml,policies/edit.yaml,policies/gone.yaml,policies/new.yaml" ||
+		strings.Join(statuses, ",") != "modified,modified,removed,added" {
+		t.Errorf("files = %v %v", names, statuses)
+	}
+	if !strings.Contains(got[0].Diff, "-a\n+b\n") || !strings.Contains(got[3].Diff, "--- /dev/null") || !strings.Contains(got[2].Diff, "+++ /dev/null") {
+		t.Errorf("diffs: %+v", got)
+	}
+	if same := Files(before, before); same == nil || len(same) != 0 {
+		t.Errorf("identical sets: %v", same)
+	}
+	// top-level files come before directories whatever their names
+	got = Files(nil, []Named{{"policies/a.yaml", "x"}, {"zz.yaml", "y"}})
+	if got[0].Name != "zz.yaml" {
+		t.Errorf("order = %v", got)
 	}
 }
