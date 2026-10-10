@@ -14,8 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/bredda/tavian/internal/auth"
 	"github.com/bredda/tavian/internal/config"
+	"github.com/bredda/tavian/internal/docs"
 	"github.com/bredda/tavian/internal/store"
 	"github.com/bredda/tavian/internal/textdiff"
 )
@@ -128,8 +131,10 @@ func (c *fakeControl) Validate(_ context.Context, r ApplyRequest) Validation {
 }
 
 const (
-	secret  = "tavadm_test-secret"
-	secret2 = "tavadm_other-secret"
+	secret  = "tavadm_test-secret"  // alice, admin
+	secret2 = "tavadm_other-secret" // bob, admin
+	secretO = "tavadm_operator-secret"
+	secretA = "tavadm_auditor-secret"
 )
 
 type fixture struct {
@@ -152,8 +157,10 @@ func newFixture(t *testing.T) *fixture {
 	f.holder.Store(&config.Snapshot{
 		Revision: "aaaaaaaaaaaa", Profile: "standard",
 		AdminTokens: map[string]*config.AdminToken{
-			auth.HashKey(secret):  {ID: "alice"},
-			auth.HashKey(secret2): {ID: "bob"},
+			auth.HashKey(secret):  {ID: "alice", Role: config.RoleAdmin},
+			auth.HashKey(secret2): {ID: "bob", Role: config.RoleAdmin},
+			auth.HashKey(secretO): {ID: "olivia", Role: config.RoleOperator},
+			auth.HashKey(secretA): {ID: "aude", Role: config.RoleAuditor},
 		},
 	})
 	f.control.reload = ok("bbbbbbbbbbbb")
@@ -277,14 +284,14 @@ func TestNotServedWithoutTokens(t *testing.T) {
 func TestWhoamiAndConfigShow(t *testing.T) {
 	f := newFixture(t)
 	res, body := f.do(t, "GET", "/admin/v1/whoami", secret2, "")
-	if res.StatusCode != 200 || !strings.Contains(body, `"actor":"bob"`) {
+	if res.StatusCode != 200 || !strings.Contains(body, `"actor":"bob"`) || !strings.Contains(body, `"role":"admin"`) {
 		t.Errorf("whoami: %d %s", res.StatusCode, body)
 	}
 	if res.Header.Get("X-Request-Id") == "" || res.Header.Get("Cache-Control") != "no-store" {
 		t.Errorf("headers: %v", res.Header)
 	}
 	res, body = f.do(t, "GET", "/admin/v1/config", secret, "")
-	if res.StatusCode != 200 || !strings.Contains(body, `"revision":"aaaaaaaaaaaa"`) || !strings.Contains(body, `"admin_tokens":2`) {
+	if res.StatusCode != 200 || !strings.Contains(body, `"revision":"aaaaaaaaaaaa"`) || !strings.Contains(body, `"admin_tokens":4`) {
 		t.Errorf("config: %d %s", res.StatusCode, body)
 	}
 	if strings.Contains(body, secret) || strings.Contains(body, auth.HashKey(secret)) {
@@ -612,5 +619,168 @@ func TestAuthenticationFailureIsLoggedWithoutTheCredential(t *testing.T) {
 	res.Body.Close()
 	if !strings.Contains(logs.String(), "admin authentication failed") || strings.Contains(logs.String(), "guess-me-please") {
 		t.Errorf("log = %s", logs.String())
+	}
+}
+
+// who may call what, written out once more here so that a mistake in the
+// table of routes cannot hide behind itself
+var expectedAccess = map[string]map[config.Role]bool{
+	"GET /admin/v1/whoami":                {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
+	"GET /admin/v1/config":                {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
+	"GET /admin/v1/changes":               {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
+	"GET /admin/v1/config/revisions":      {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
+	"GET /admin/v1/config/revisions/{id}": {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
+	"GET /admin/v1/config/diff":           {config.RoleAdmin: true, config.RoleOperator: true, config.RoleAuditor: true},
+	"POST /admin/v1/config/validate":      {config.RoleAdmin: true, config.RoleOperator: true},
+	"POST /admin/v1/config/reload":        {config.RoleAdmin: true, config.RoleOperator: true},
+	"POST /admin/v1/config/apply":         {config.RoleAdmin: true},
+	"POST /admin/v1/config/rollback":      {config.RoleAdmin: true},
+}
+
+var tokenOf = map[config.Role]string{config.RoleAdmin: secret, config.RoleOperator: secretO, config.RoleAuditor: secretA}
+
+func TestEveryRouteChecksTheRole(t *testing.T) {
+	f := newFixture(t)
+	if got := len(Routes()); got != len(expectedAccess) {
+		t.Fatalf("%d routes, %d expectations: every route must be written in expectedAccess", got, len(expectedAccess))
+	}
+	for _, rt := range Routes() {
+		key := rt.Method + " " + rt.Path
+		want, ok := expectedAccess[key]
+		if !ok {
+			t.Errorf("%s has no expectation", key)
+			continue
+		}
+		path := strings.Replace(rt.Path, "{id}", "active", 1)
+		if strings.HasSuffix(path, "/diff") {
+			path += "?from=active"
+		}
+		for _, role := range []config.Role{config.RoleAdmin, config.RoleOperator, config.RoleAuditor} {
+			before := f.control.calls
+			res, body := f.do(t, rt.Method, path, tokenOf[role], `{"config":"x","base":"aaaaaaaaaaaa","revision":"bbbbbbbbbbbb"}`)
+			if forbidden := res.StatusCode == http.StatusForbidden; forbidden == want[role] {
+				t.Errorf("%s as %s: %d %s, allowed should be %v", key, role, res.StatusCode, body, want[role])
+			}
+			if res.StatusCode == http.StatusForbidden {
+				if errCode(t, body) != "forbidden" || !strings.Contains(body, string(role)) {
+					t.Errorf("%s as %s: %s", key, role, body)
+				}
+				if f.control.calls != before {
+					t.Errorf("%s as %s: the controller was called by a token that may not", key, role)
+				}
+			}
+			if res.StatusCode == http.StatusUnauthorized {
+				t.Errorf("%s as %s: unauthenticated", key, role)
+			}
+		}
+	}
+	// what each role holds is what the permissions say, and nothing is held by a stranger
+	if Allows("", PermRead) || Allows("root", PermRead) || Allows(config.RoleAuditor, PermOperate) || Allows(config.RoleOperator, PermChange) {
+		t.Error("a permission is held by a role that should not have it")
+	}
+}
+
+func TestEveryOperationOfTheDescriptionIsARouteWithARole(t *testing.T) {
+	mux := http.NewServeMux()
+	docs.RegisterAdmin(mux, "test", func() bool { return true })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/admin/v1/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var doc struct {
+		Paths map[string]map[string]struct {
+			Responses    map[string]any `yaml:"responses"`
+			RequiredRole string         `yaml:"x-required-role"`
+		} `yaml:"paths"`
+	}
+	if err := yaml.NewDecoder(res.Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	routes := map[string]RouteInfo{}
+	for _, rt := range Routes() {
+		routes[rt.Method+" "+rt.Path] = rt
+	}
+	seen := 0
+	for path, ops := range doc.Paths {
+		for method, op := range ops {
+			key := strings.ToUpper(method) + " " + path
+			rt, ok := routes[key]
+			if !ok {
+				t.Errorf("%s is in the description but is not a route", key)
+				continue
+			}
+			// the role the description names is the lowest one that holds the permission
+			lowest := map[Permission]string{PermRead: "auditor", PermOperate: "operator", PermChange: "admin"}[rt.Permission]
+			if op.RequiredRole != lowest {
+				t.Errorf("%s: the description says it needs %q, the route needs %s (%q)", key, op.RequiredRole, rt.Permission, lowest)
+			}
+			seen++
+			if _, has := op.Responses["403"]; !has {
+				t.Errorf("%s: every call can be refused for its role, the description should say so", key)
+			}
+		}
+	}
+	if seen != len(routes) {
+		t.Errorf("the description has %d operations, the API %d routes", seen, len(routes))
+	}
+}
+
+func TestAnAttemptToChangeWithoutTheRoleIsRecorded(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range []struct {
+		path, token, actor string
+		role               config.Role
+	}{
+		{"/admin/v1/config/apply", secretO, "olivia", config.RoleOperator},
+		{"/admin/v1/config/rollback", secretA, "aude", config.RoleAuditor},
+		{"/admin/v1/config/reload", secretA, "aude", config.RoleAuditor},
+	} {
+		if res, _ := f.do(t, "POST", c.path, c.token, `{"config":"x","base":"aaaaaaaaaaaa","revision":"bbbbbbbbbbbb"}`); res.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s as %s = %d", c.path, c.actor, res.StatusCode)
+		}
+		last := f.store.changes[len(f.store.changes)-1]
+		if last.Actor != c.actor || last.Outcome != store.OutcomeRejected || !strings.Contains(string(last.Detail), `"forbidden"`) ||
+			!strings.Contains(string(last.Detail), string(c.role)) || last.RemoteAddr != "127.0.0.1" || last.RequestID == "" {
+			t.Errorf("%s: record = %+v", c.path, last)
+		}
+	}
+	if len(f.store.changes) != 3 || f.control.calls != 0 {
+		t.Errorf("%d records, %d controller calls", len(f.store.changes), f.control.calls)
+	}
+	// looking is not changing: a refused read or check leaves no record, only a count
+	n := len(f.store.changes)
+	f.do(t, "POST", "/admin/v1/config/validate", secretA, `{"config":"x"}`)
+	if len(f.store.changes) != n {
+		t.Error("a refused check was recorded as a change")
+	}
+	if got := strings.Join(f.observed, ","); got != "config.apply:forbidden,config.rollback:forbidden,config.reload:forbidden,config.validate:forbidden" {
+		t.Errorf("observed = %s", got)
+	}
+	// and a refusal stands when the record cannot be written
+	f.store.failOn = true
+	if res, _ := f.do(t, "POST", "/admin/v1/config/apply", secretO, `{"config":"x","base":"aaaaaaaaaaaa"}`); res.StatusCode != http.StatusForbidden {
+		t.Errorf("with the store down: %d", res.StatusCode)
+	}
+}
+
+func TestTheRolesCanDoWhatTheyMay(t *testing.T) {
+	f := newFixture(t)
+	// an operator reloads and checks, and reads
+	if res, body := f.do(t, "POST", "/admin/v1/config/reload", secretO, ""); res.StatusCode != 200 || f.control.who.ID != "olivia" {
+		t.Errorf("operator reload: %d %s (%+v)", res.StatusCode, body, f.control.who)
+	}
+	if res, _ := f.do(t, "POST", "/admin/v1/config/validate", secretO, `{"config":"x"}`); res.StatusCode != 200 {
+		t.Errorf("operator validate: %d", res.StatusCode)
+	}
+	// an auditor reads, whoever the history is about
+	f.store.changes = []store.AdminChange{{EventID: "e1", Actor: "alice"}}
+	if res, body := f.do(t, "GET", "/admin/v1/changes", secretA, ""); res.StatusCode != 200 || !strings.Contains(body, "alice") {
+		t.Errorf("auditor changes: %d %s", res.StatusCode, body)
+	}
+	if res, body := f.do(t, "GET", "/admin/v1/whoami", secretA, ""); !strings.Contains(body, `"role":"auditor"`) || res.StatusCode != 200 {
+		t.Errorf("auditor whoami: %d %s", res.StatusCode, body)
 	}
 }

@@ -8,5 +8,9 @@ internal/config/snapshot.go	s.AdminTokens[h] = &t	s.Keys[h] = &APIKey{ID: t.ID}
 internal/config/snapshot.go	!idPattern.MatchString(t.ID)	false
 internal/config/config.go	if seen[p.Name] {	if false {
 internal/config/config.go	cfg.Audit.SigningKeyFile = filepath.Join(dir, k)	cfg.Audit.SigningKeyFile = k
-internal/config/config.go	if !policyFileName.MatchString(p.Name) {	if false {
+internal/config/config.go	if !ValidPolicyFileName(p.Name) {	if false {
 internal/config/config.go	cfg.PolicySources = policies	cfg.PolicySources = nil
+internal/config/snapshot.go	if !t.Role.Valid() {	if false {
+internal/config/snapshot.go	!s.HasAdmin() && len(errs) == adminErrs {	false && len(errs) == adminErrs {
+internal/config/snapshot.go	if t.Role == RoleAdmin {	if t.Role == RoleAdmin || true {
+internal/config/config.go	return r == RoleAdmin || r == RoleOperator || r == RoleAuditor }	return r == RoleAdmin || r == RoleOperator }

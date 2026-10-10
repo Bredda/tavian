@@ -26,3 +26,16 @@ internal/admin/admin.go	target, store.OutcomeRejected,	target, store.OutcomeAppl
 internal/admin/revisions.go	err != nil || n < 1 || n > 500	err != nil || n < 1 || n > 5000
 internal/admin/revisions.go	err != nil || n < 1 {	err != nil || n < 0 {
 internal/admin/revisions.go	if errors.Is(err, store.ErrNotFound) {	if errors.Is(err, store.ErrNotFound) && false {
+internal/admin/admin.go	config.RoleAuditor:  {PermRead},	config.RoleAuditor:  {PermRead, PermOperate},
+internal/admin/admin.go	config.RoleOperator: {PermRead, PermOperate},	config.RoleOperator: {PermRead, PermOperate, PermChange},
+internal/admin/admin.go	config.RoleAdmin:    {PermRead, PermOperate, PermChange},	config.RoleAdmin:    {PermRead, PermOperate},
+internal/admin/admin.go	"/config/apply", PermChange, true	"/config/apply", PermOperate, true
+internal/admin/admin.go	"/config/reload", PermOperate, true	"/config/reload", PermChange, true
+internal/admin/admin.go	"/config/validate", PermOperate, false	"/config/validate", PermRead, false
+internal/admin/admin.go	"/config/rollback", PermChange, true	"/config/rollback", PermChange, false
+internal/admin/admin.go	if !Allows(who.Role, rt.Permission) {	if false {
+internal/admin/admin.go	if rt.Mutating && a.Store != nil {	if false {
+internal/admin/admin.go	return slices.Contains(permissions[role], p)	return slices.Contains(permissions[role], p) || true
+internal/admin/admin.go	a.observe(rt.action, "forbidden")	a.observe(rt.action, "rejected")
+internal/admin/admin.go	map[string]string{"code": "forbidden", "role": string(c.role)}	map[string]string{"code": "forbidden"}
+internal/admin/admin.go	writeError(w, http.StatusForbidden, "forbidden",	writeError(w, http.StatusUnauthorized, "forbidden",

@@ -107,7 +107,7 @@ func cmdKeygen(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		fmt.Fprintf(stdout, "token: %s\nhash:  %s\n", token, hash)
-		fmt.Fprintln(stderr, "\nStore the token now, it cannot be recovered. Put only the hash in the configuration (admin.tokens[].hash) with an id that names its holder.")
+		fmt.Fprintln(stderr, "\nStore the token now, it cannot be recovered. Put only the hash in the configuration (admin.tokens[].hash) with an id that names its holder and a role: admin, operator or auditor.")
 		return 0
 	}
 	key, hash, err := auth.GenerateKey()

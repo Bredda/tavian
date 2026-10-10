@@ -122,7 +122,7 @@ func freeAddr(t *testing.T) string {
 // demoConfig is deploy/compose/tavian.yaml with what only Docker needs
 // replaced: where the backends and the database are, and no OIDC provider.
 // Models, prices, keys and policies are the demo's own.
-func demoConfig(t *testing.T, root, dir string, onprem, partner *backend, data, admin, adminHash string) string {
+func demoConfig(t *testing.T, root, dir string, onprem, partner *backend, data, admin string, tokens []any) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "tavian.yaml"))
 	if err != nil {
@@ -136,7 +136,7 @@ func demoConfig(t *testing.T, root, dir string, onprem, partner *backend, data, 
 	cfg["listen"] = map[string]any{"data": data, "admin": admin}
 	cfg["database"] = map[string]any{"url_env": "TAVIAN_DATABASE_URL", "spool_dir": filepath.Join(dir, "spool")}
 	cfg["audit"] = map[string]any{"signing_key_file": filepath.Join(dir, "audit.key"), "seal_every_events": 4, "seal_every": "2s"}
-	cfg["admin"] = map[string]any{"tokens": []any{map[string]any{"id": "e2e-admin", "hash": adminHash}}}
+	cfg["admin"] = map[string]any{"tokens": tokens}
 	cfg["workers"] = map[string]any{"poll_interval": "100ms"}
 	cfg["policy"] = map[string]any{"dir": filepath.Join(dir, "policies")}
 	for _, b := range cfg["backends"].([]any) {
@@ -438,20 +438,28 @@ func TestFinanceDemo(t *testing.T) {
 	g := &gateway{
 		t: t, bin: bin, dbURL: dbURL, data: freeAddr(t), admin: freeAddr(t), log: filepath.Join(dir, "gateway.log"),
 	}
-	out, code := g.tavian("keygen", "-admin")
-	var adminToken, adminHash string
-	for _, l := range strings.Split(out, "\n") {
-		if v, ok := strings.CutPrefix(l, "token: "); ok {
-			adminToken = strings.TrimSpace(v)
+	newToken := func(id string, role string) (token string, entry map[string]any) {
+		out, code := g.tavian("keygen", "-admin")
+		var hash string
+		for _, l := range strings.Split(out, "\n") {
+			if v, ok := strings.CutPrefix(l, "token: "); ok {
+				token = strings.TrimSpace(v)
+			}
+			if v, ok := strings.CutPrefix(l, "hash:  "); ok {
+				hash = strings.TrimSpace(v)
+			}
 		}
-		if v, ok := strings.CutPrefix(l, "hash:  "); ok {
-			adminHash = strings.TrimSpace(v)
+		if code != 0 || token == "" || hash == "" {
+			t.Fatalf("keygen -admin (exit %d): %s", code, out)
 		}
+		return token, map[string]any{"id": id, "role": role, "hash": hash}
 	}
-	if code != 0 || adminToken == "" || adminHash == "" {
-		t.Fatalf("keygen -admin (exit %d): %s", code, out)
-	}
-	g.cfg = demoConfig(t, root, dir, onprem, partner, g.data, g.admin, adminHash)
+	adminToken, adminEntry := newToken("e2e-admin", "admin")
+	operatorToken, operatorEntry := newToken("e2e-operator", "operator")
+	auditorToken, auditorEntry := newToken("e2e-auditor", "auditor")
+	adminHash := adminEntry["hash"].(string)
+	g.cfg = demoConfig(t, root, dir, onprem, partner, g.data, g.admin, []any{adminEntry, operatorEntry, auditorEntry})
+	out, code := "", 0
 
 	out, code = g.tavian("audit-keygen", "-out", filepath.Join(dir, "audit.key"))
 	if code != 0 {
@@ -722,6 +730,49 @@ func TestFinanceDemo(t *testing.T) {
 				t.Fatalf("%d of the %d admin changes are in the chain", n, len(ids))
 			}
 			time.Sleep(200 * time.Millisecond)
+		}
+	})
+
+	// 4b2. Roles: an auditor only reads, an operator reloads and checks but
+	//      does not change the configuration, and a refused attempt is on record.
+	t.Run("roles limit what a token may do", func(t *testing.T) {
+		as := func(token, method, path, body string) (int, string) { return g.adminCall(method, path, token, body) }
+		for name, token := range map[string]string{"auditor": auditorToken, "operator": operatorToken, "admin": adminToken} {
+			if code, body := as(token, "GET", "/admin/v1/whoami", ""); code != 200 || !strings.Contains(body, `"role":"`+name+`"`) {
+				t.Errorf("whoami as %s: %d %s", name, code, body)
+			}
+			if code, _ := as(token, "GET", "/admin/v1/changes?limit=5", ""); code != 200 {
+				t.Errorf("%s cannot read the history: %d", name, code)
+			}
+		}
+		_, running := as(adminToken, "GET", "/admin/v1/config", "")
+		change := `{"config":"profile: standard\n","base":"` + strings.Split(strings.Split(running, `"revision":"`)[1], `"`)[0] + `"}`
+		for _, c := range []struct{ who, token, method, path, body string }{
+			{"auditor", auditorToken, "POST", "/admin/v1/config/apply", change},
+			{"auditor", auditorToken, "POST", "/admin/v1/config/reload", ""},
+			{"auditor", auditorToken, "POST", "/admin/v1/config/validate", change},
+			{"operator", operatorToken, "POST", "/admin/v1/config/apply", change},
+			{"operator", operatorToken, "POST", "/admin/v1/config/rollback", `{"revision":"aaaaaaaaaaaa","base":"bbbbbbbbbbbb"}`},
+		} {
+			if code, body := as(c.token, c.method, c.path, c.body); code != 403 || !strings.Contains(body, `"forbidden"`) {
+				t.Errorf("%s %s %s: %d %s, want 403", c.who, c.method, c.path, code, body)
+			}
+		}
+		if code, _ := as(operatorToken, "POST", "/admin/v1/config/validate", `{"config":"profile: standard\n"}`); code != 200 {
+			t.Errorf("operator validate: %d", code)
+		}
+		if code, body := as(operatorToken, "POST", "/admin/v1/config/reload", ""); code != 200 {
+			t.Errorf("operator reload: %d %s", code, body)
+		}
+		// the refused attempts to change are in the history, with who and what role
+		_, hist := as(auditorToken, "GET", "/admin/v1/changes?limit=100", "")
+		for _, want := range []string{`"actor":"e2e-auditor"`, `"actor":"e2e-operator"`, `"forbidden"`} {
+			if !strings.Contains(hist, want) {
+				t.Errorf("the history lacks %s", want)
+			}
+		}
+		if strings.Contains(hist, `"actor":"e2e-auditor","action":"config.validate"`) {
+			t.Error("a refused check was recorded as a change")
 		}
 	})
 

@@ -183,6 +183,7 @@ models:
 # admin:
 #   tokens:
 #     - id: ops-alice
+#       role: admin             # admin, operator or auditor: see docs/ADMIN_API.md
 #       hash: sha256:REPLACE_WITH_OUTPUT_OF_tavian_keygen_-admin
 
 api_keys:

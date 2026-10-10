@@ -321,6 +321,7 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 	}
 
 	adminIDs := map[string]bool{}
+	adminErrs := len(errs)
 	for i := range cfg.Admin.Tokens {
 		t := cfg.Admin.Tokens[i]
 		where := fmt.Sprintf("admin.tokens[%d]", i)
@@ -334,6 +335,10 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 			continue
 		}
 		adminIDs[t.ID] = true
+		if !t.Role.Valid() {
+			addf("%s: role must be admin, operator or auditor (got %q)", where, t.Role)
+			continue
+		}
 		h, ok := strings.CutPrefix(strings.ToLower(t.Hash), "sha256:")
 		if !ok || len(h) != 64 {
 			addf("%s: hash must be \"sha256:\" followed by 64 hex characters (use `tavian keygen -admin`)", where)
@@ -349,6 +354,9 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		}
 		s.AdminTokens[h] = &t
 	}
+	if len(cfg.Admin.Tokens) > 0 && !s.HasAdmin() && len(errs) == adminErrs {
+		addf("admin.tokens: at least one token needs the role admin, or nobody could change the configuration")
+	}
 	if len(cfg.Admin.Tokens) > 0 && cfg.Database.URLEnv == "" {
 		addf("admin.tokens: the administration API records every change in the database (database.url_env)")
 	}
@@ -357,6 +365,16 @@ func Compile(cfg *Config, raw []byte, getenv func(string) string) (*Snapshot, er
 		return nil, fmt.Errorf("invalid configuration:\n%w", errors.Join(errs...))
 	}
 	return s, nil
+}
+
+// HasAdmin says whether a token with the role admin is configured.
+func (s *Snapshot) HasAdmin() bool {
+	for _, t := range s.AdminTokens {
+		if t.Role == RoleAdmin {
+			return true
+		}
+	}
+	return false
 }
 
 // KeyExpiry summarises which API keys have expired or are about to.

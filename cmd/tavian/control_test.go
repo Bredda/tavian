@@ -51,7 +51,7 @@ api_keys:
 		if id != "ops" {
 			_, hash, _ = auth.GenerateAdminToken()
 		}
-		body += `    - {id: ` + id + `, hash: "` + hash + `"}` + "\n"
+		body += `    - {id: ` + id + `, role: admin, hash: "` + hash + `"}` + "\n"
 	}
 	return body
 }
@@ -287,6 +287,25 @@ func TestApplyCannotLockEveryoneOut(t *testing.T) {
 	// replacing the tokens is fine as long as one remains
 	if _, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: e.configYAML("", "second"), Base: base}); err != nil {
 		t.Errorf("replacing the admin tokens: %v", err)
+	}
+}
+
+func TestApplyKeepsAnAdminToken(t *testing.T) {
+	e := newCtlEnv(t)
+	base := e.holder.Load().Revision
+	// tokens remain, but none of them may change the configuration
+	onlyAuditors := strings.Replace(e.configYAML(""), "role: admin", "role: auditor", 1)
+	_, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: onlyAuditors, Base: base})
+	if rej := e.rejection(err); rej.Code != "invalid_configuration" || !strings.Contains(rej.Message, "the role admin") {
+		t.Errorf("only an auditor left: %+v", rej)
+	}
+	// giving the role away is fine as long as another admin stays
+	two := strings.Replace(e.configYAML("", "ops", "second"), "{id: ops, role: admin", "{id: ops, role: operator", 1)
+	if _, err := e.ctl.Apply(bg, who("ops"), admin.ApplyRequest{Config: two, Base: base}); err != nil {
+		t.Errorf("an operator and another admin: %v", err)
+	}
+	if v := e.ctl.Validate(bg, admin.ApplyRequest{Config: onlyAuditors}); v.Valid {
+		t.Errorf("validate accepts a configuration nobody could change: %+v", v)
 	}
 }
 

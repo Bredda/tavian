@@ -921,30 +921,40 @@ func compileAdmin(t *testing.T, adminYAML string, getenv map[string]string) (*Sn
 func TestAdminTokens(t *testing.T) {
 	db := map[string]string{"DB_URL": "postgres://x"}
 	const withDB = "database: {url_env: DB_URL}\n"
-	s, err := compileAdmin(t, withDB+"admin:\n  tokens:\n    - {id: ops-alice, hash: "+hashA+"}\n    - {id: ci, hash: \""+strings.ToUpper(hashB)+"\"}\n", db)
+	s, err := compileAdmin(t, withDB+"admin:\n  tokens:\n    - {id: ops-alice, role: admin, hash: "+hashA+"}\n    - {id: ci, role: auditor, hash: \""+strings.ToUpper(hashB)+"\"}\n", db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.AdminTokens) != 2 || s.AdminTokens[strings.Repeat("a", 64)].ID != "ops-alice" || s.AdminTokens[strings.Repeat("b", 64)].ID != "ci" {
+	if len(s.AdminTokens) != 2 || s.AdminTokens[strings.Repeat("a", 64)].ID != "ops-alice" || s.AdminTokens[strings.Repeat("b", 64)].ID != "ci" ||
+		s.AdminTokens[strings.Repeat("a", 64)].Role != RoleAdmin || s.AdminTokens[strings.Repeat("b", 64)].Role != RoleAuditor {
 		t.Errorf("tokens = %+v", s.AdminTokens)
+	}
+	if !s.HasAdmin() {
+		t.Error("HasAdmin is false with an admin token")
 	}
 	if len(s.Keys) != 0 {
 		t.Error("an admin token became an API key")
 	}
 
 	none, err := compileAdmin(t, "", nil)
+	if err == nil && none.HasAdmin() {
+		t.Error("HasAdmin without tokens")
+	}
 	if err != nil || len(none.AdminTokens) != 0 {
 		t.Errorf("no tokens: %v %v", none.AdminTokens, err)
 	}
 
 	for name, c := range map[string]struct{ yaml, want string }{
-		"bad id":         {withDB + "admin:\n  tokens: [{id: Alice!, hash: " + hashA + "}]\n", "id"},
-		"duplicate id":   {withDB + "admin:\n  tokens: [{id: a, hash: " + hashA + "}, {id: a, hash: " + hashB + "}]\n", "duplicate id"},
-		"duplicate hash": {withDB + "admin:\n  tokens: [{id: a, hash: " + hashA + "}, {id: b, hash: " + hashA + "}]\n", "duplicate hash"},
-		"short hash":     {withDB + "admin:\n  tokens: [{id: a, hash: \"sha256:abc\"}]\n", "tavian keygen -admin"},
-		"no prefix":      {withDB + "admin:\n  tokens: [{id: a, hash: " + strings.Repeat("a", 64) + "}]\n", "sha256:"},
-		"not hex":        {withDB + "admin:\n  tokens: [{id: a, hash: \"sha256:" + strings.Repeat("z", 64) + "\"}]\n", "valid hex"},
-		"no database":    {"admin:\n  tokens: [{id: a, hash: " + hashA + "}]\n", "database.url_env"},
+		"bad id":         {withDB + "admin:\n  tokens: [{id: Alice!, role: admin, hash: " + hashA + "}]\n", "id"},
+		"duplicate id":   {withDB + "admin:\n  tokens: [{id: a, role: admin, hash: " + hashA + "}, {id: a, role: admin, hash: " + hashB + "}]\n", "duplicate id"},
+		"duplicate hash": {withDB + "admin:\n  tokens: [{id: a, role: admin, hash: " + hashA + "}, {id: b, role: admin, hash: " + hashA + "}]\n", "duplicate hash"},
+		"short hash":     {withDB + "admin:\n  tokens: [{id: a, role: admin, hash: \"sha256:abc\"}]\n", "tavian keygen -admin"},
+		"no prefix":      {withDB + "admin:\n  tokens: [{id: a, role: admin, hash: " + strings.Repeat("a", 64) + "}]\n", "sha256:"},
+		"not hex":        {withDB + "admin:\n  tokens: [{id: a, role: admin, hash: \"sha256:" + strings.Repeat("z", 64) + "\"}]\n", "valid hex"},
+		"no role":        {withDB + "admin:\n  tokens: [{id: a, hash: " + hashA + "}]\n", "role must be admin, operator or auditor"},
+		"unknown role":   {withDB + "admin:\n  tokens: [{id: a, role: root, hash: " + hashA + "}]\n", "role must be admin, operator or auditor"},
+		"no admin role":  {withDB + "admin:\n  tokens: [{id: a, role: operator, hash: " + hashA + "}, {id: b, role: auditor, hash: " + hashB + "}]\n", "at least one token needs the role admin"},
+		"no database":    {"admin:\n  tokens: [{id: a, role: admin, hash: " + hashA + "}]\n", "database.url_env"},
 	} {
 		if _, err := compileAdmin(t, c.yaml, db); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, c.want)
@@ -988,5 +998,23 @@ func TestFromRevision(t *testing.T) {
 	}
 	if _, err := FromRevision([]byte("profile: air-gapped\nbogus: 1\n"), nil, "/etc"); err == nil {
 		t.Error("an unknown field was accepted")
+	}
+}
+
+func TestRoles(t *testing.T) {
+	for _, r := range []Role{RoleAdmin, RoleOperator, RoleAuditor} {
+		if !r.Valid() {
+			t.Errorf("%q is not valid", r)
+		}
+	}
+	for _, r := range []Role{"", "root", "Admin", "admin "} {
+		if r.Valid() {
+			t.Errorf("%q is valid", r)
+		}
+	}
+	// an operator and an auditor alone cannot run a gateway that must be changed
+	s := &Snapshot{AdminTokens: map[string]*AdminToken{"a": {ID: "a", Role: RoleOperator}, "b": {ID: "b", Role: RoleAuditor}}}
+	if s.HasAdmin() {
+		t.Error("HasAdmin with no admin")
 	}
 }
